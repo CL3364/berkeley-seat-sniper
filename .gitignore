@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# test + tooling artifacts
+coverage/
+playwright-report/
+test-results/
+.vitest/
+
+# secrets & local data (NEVER commit — see constitution)
+.env
+.env.*
+!env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*vapid*
+secrets/
+data/
+*.sqlite
+*.sqlite3
+*.db
+
+# editor / OS
+.DS_Store
+*.log
+
+# team-runtime transients (hook bookkeeping / acceptance flag)
+.claude/.idle-nudge-count
+.claude/acceptance.passed

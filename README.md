@@ -1,0 +1,43 @@
+# Berkeley Seat Sniper
+
+Notify-only monitor that watches public Berkeley class pages and alerts subscribers
+the moment a maxed-out class opens a seat. No CalNet, no credentials, no auto-enroll —
+a subscriber gives an email + a list of class URLs/codes, nothing more.
+
+See [`specs/spec.md`](specs/spec.md) for the living spec and [`constitution.md`](constitution.md)
+for project law. The API contract in [`src/shared`](src/shared) is the single source of truth.
+
+## Stack
+
+- **Frontend:** Vite + React + TypeScript (`src/client`, `src/components`)
+- **Backend:** Hono + TypeScript (`src/server`, `src/api`)
+- **Database:** Postgres via Drizzle ORM (`src/db`, `drizzle`) — tests run against an
+  in-process Postgres (PGlite), production against a real Postgres via `DATABASE_URL`.
+- **Scraper / worker / notifier:** `src/scraper`, `src/worker`, `src/notify`
+- **Tests:** Vitest (`tests`), Playwright (`e2e`)
+
+## Develop
+
+```bash
+npm install
+cp env.example .env   # fill in TOKEN_SECRET etc.; never commit .env
+npm run db:generate   # generate migrations from the schema
+npm run dev:server    # Hono API on :8787
+npm run dev:web       # Vite dashboard on :5173 (proxies /api -> :8787)
+```
+
+## Verify (the layered gates)
+
+```bash
+./scripts/fast-gate.sh          # format + lint on changed files (per task)
+./scripts/integration-gate.sh   # typecheck + unit + integration + e2e (per feature)
+SECURITY_GATE_STRICT=1 ./scripts/security-gate.sh   # secrets + deps + SAST
+```
+
+## Operating safety
+
+- Notify-only; one centralized poller fetches each unique class once per interval and
+  fans out. Cadence, jitter, backoff, `User-Agent`, and a global `KILL_SWITCH` are env-tuned.
+- Fetched HTML is untrusted data — parsed with a real parser against saved fixtures; a
+  parse break raises a distinct operator alert and never emits a false "0 seats".
+- Subscriber emails + watch lists are sensitive: never logged, never committed.

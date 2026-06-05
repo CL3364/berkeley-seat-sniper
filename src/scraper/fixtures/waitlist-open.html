@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!--
+  Synthetic fixture: 0 open seats, waitlist open.
+  Expected parse result: { status: 'waitlist', openSeats: 0, waitlistOpen: true }
+  See fixtures/README.md for context.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>COMPSCI 189 LEC 001 | UC Berkeley</title>
+</head>
+<body>
+  <div class="view-content">
+    <div class="section-main">
+      <h1 class="node-title">Computer Science 189 - Section 001 - Lecture</h1>
+
+      <!-- Enrollment numbers block -->
+      <div class="field field--name-enroll-numbers enroll-numbers">
+        <div class="enroll-row">
+          <span class="label">Enrolled / Max:</span>
+          <span class="enrolled count">350</span>
+          <span class="separator">/</span>
+          <span class="max count">350</span>
+        </div>
+        <div class="enroll-row">
+          <span class="label">Open Seats:</span>
+          <span class="available">
+            <span class="count">0</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Waitlist block — "Open" text triggers waitlistOpen: true -->
+      <div class="field field--name-waitlist-status">
+        <span class="label">Waitlist Status:</span>
+        <span class="waitlist-status">Open</span>
+      </div>
+
+      <div class="field field--name-class-status">
+        <span class="label">Class Status:</span>
+        <span class="class-status">Waitlist</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
