@@ -157,11 +157,7 @@ export async function fetchClass(
  * constructed by `fetchClass` from the canonical key — never a URL from page
  * content.
  */
-async function doFetch(
-  url: string,
-  classKey: ClassKey,
-  fetchImpl: FetchImpl,
-): Promise<string> {
+async function doFetch(url: string, classKey: ClassKey, fetchImpl: FetchImpl): Promise<string> {
   const timeoutMs = parseTimeoutMs(process.env.FETCH_TIMEOUT_MS, 10_000);
   const userAgent =
     process.env.FETCH_USER_AGENT ?? 'berkeley-seat-sniper/1 (contact: operator@example.com)';
@@ -191,10 +187,7 @@ async function doFetch(
   clearTimeout(timer);
 
   if (response.status !== 200) {
-    throw new FetchError(
-      response.status,
-      `non-200 response (${response.status}) for ${classKey}`,
-    );
+    throw new FetchError(response.status, `non-200 response (${response.status}) for ${classKey}`);
   }
 
   return response.text();
@@ -282,5 +275,7 @@ function parseTimeoutMs(raw: string | undefined, fallback: number): number {
  * to embed in a short operator `detail` string. Never includes raw HTML body.
  */
 function sanitizeDetail(msg: string): string {
-  return msg.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 120);
+  // Strip C0 control characters and DEL using Unicode category Cc.
+  // Using \p{Cc} avoids embedding literal control-character ranges in the regex.
+  return msg.replace(/\p{Cc}/gu, '').slice(0, 120);
 }

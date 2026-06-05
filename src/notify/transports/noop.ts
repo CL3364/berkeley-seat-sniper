@@ -1,41 +1,29 @@
-import type { Transport, TransportMessage, OutboxEntry } from '../types';
+import type { Transport, TransportMessage } from '../types';
 
 /**
- * No-op transport (FR-8). Appends every sent message to an in-memory outbox
- * array rather than making any network calls. The outbox is shared by
- * reference, so tests can inspect it directly:
+ * No-op transport (FR-8). Simulates successful delivery without making any
+ * network calls. Logging uses opaque metadata only — `to` is NOT printed
+ * (PII rule; constitution/§6/AC-8).
  *
- *   const outbox: OutboxEntry[] = [];
- *   const t = createNoopTransport(outbox);
- *
- * Log line: one structured line per send with opaque metadata only — `to` is
- * NOT printed (PII rule; constitution/§6/AC-8).
+ * The outbox is owned and written by the Notifier layer (see index.ts), not by
+ * this transport, so there is no double-push race when dispatch and alertOperator
+ * both flow through the same send function. This transport's sole job is to
+ * confirm "I would have sent this" and return successfully.
  */
-export function createNoopTransport(outbox: OutboxEntry[]): Transport {
+export function createNoopTransport(): Transport {
   return {
     async send(message: TransportMessage): Promise<void> {
-      const entry: OutboxEntry = {
-        // kind is filled by the Notifier layer; transport just stores the envelope.
-        // We default to 'subscriber' here; the Notifier overwrites it for operator
-        // alerts by pushing directly, not through this path.
-        kind: 'subscriber',
-        to: message.to,
-        subject: message.subject,
-        body: message.body,
-        sentAt: new Date().toISOString(),
-      };
-      outbox.push(entry);
-
       // Structured log — no address, no watch list (AC-8).
       console.log(
         JSON.stringify({
           level: 'info',
           transport: 'noop',
-          event: 'mail_sent',
+          event: 'mail_queued',
           subject: message.subject,
-          sentAt: entry.sentAt,
+          sentAt: new Date().toISOString(),
         }),
       );
+      // No network call; no outbox push — the Notifier layer owns those.
     },
   };
 }

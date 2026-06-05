@@ -13,16 +13,17 @@ fixtures together, and ensure `changed-shape.html` still triggers parser-broke.
 
 ## Files
 
-| File | Scenario |
-|------|----------|
-| `zero-seats.html` | 0 open seats, waitlist closed → status `closed` |
-| `open-seats.html` | >0 open seats → status `open` |
-| `waitlist-open.html` | 0 open seats, waitlist open → status `waitlist` |
+| File                 | Scenario                                                           |
+| -------------------- | ------------------------------------------------------------------ |
+| `zero-seats.html`    | 0 open seats, waitlist closed → status `closed`                    |
+| `open-seats.html`    | >0 open seats → status `open`                                      |
+| `waitlist-open.html` | 0 open seats, waitlist open → status `waitlist`                    |
 | `changed-shape.html` | Page whose enrollment nodes are absent → must yield `parser-broke` |
 
 ## Selectors relied on (see `parse.ts`)
 
 The parser targets:
+
 - `.enroll-numbers .available .count` — integer open seat count
 - `.waitlist-status` — present element containing text "open" when waitlist is open
 

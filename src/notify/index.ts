@@ -6,10 +6,10 @@
  *   createNotifier(options?)  → Notifier
  *     .dispatch(event)        → Promise<DispatchResult>  (idempotent, AC-3/AC-4)
  *     .alertOperator(key, d)  → Promise<void>            (parser-broke, AC-5)
- *     .outbox                 → OutboxEntry[]            (noop transport only)
+ *     .outbox                 → OutboxEntry[]            (noop/any transport)
  *
  * Transport is selected by MAIL_TRANSPORT env var:
- *   noop  (default) — append-only in-memory outbox; no network calls (FR-8)
+ *   noop  (default) — no network calls; outbox captures sent mail (FR-8)
  *   real            — SMTP or Resend adapter (env-keyed; never hardcoded)
  *
  * PII discipline (constitution / §6 / AC-8):
@@ -23,6 +23,10 @@
  *
  * Delivery failures from the transport are surfaced as thrown errors — the
  * worker catches them and counts them as failures; they never silently vanish.
+ *
+ * Outbox ownership: the Notifier layer pushes all OutboxEntry records so there
+ * is no double-push race between the transport and the notifier. The transport's
+ * only job is to confirm delivery (or throw on failure).
  */
 
 import type { NotifyEvent } from '../shared/seat-state';
@@ -43,7 +47,7 @@ export interface NotifierOptions {
   transport?: Transport;
 
   /**
-   * Sender address. Falls back to MAIL_FROM env var, then a safe default.
+   * Sender address. Falls back to MAIL_FROM env var, then a local default.
    * The real transport also validates MAIL_FROM at construction, so this only
    * matters for the noop path.
    */
@@ -56,13 +60,17 @@ export interface NotifierOptions {
  * Set is synchronously updated before any await so double-fires on the same
  * event are reliably caught even in a single-threaded event loop.
  *
- *   // test usage
- *   const { dispatch, alertOperator, outbox } = createNotifier({ transport: createNoopTransport(outbox) });
- *
- *   // production usage (reads MAIL_TRANSPORT from env)
+ * Usage:
+ *   // production (reads MAIL_TRANSPORT from env; defaults to 'noop')
  *   const notifier = createNotifier();
+ *
+ *   // test usage (explicit noop, inspect outbox)
+ *   const notifier = createNotifier({ transport: createNoopTransport() });
+ *   await notifier.dispatch(event);
+ *   console.log(notifier.outbox); // [{ kind: 'subscriber', subject: '...', ... }]
  */
 export function createNotifier(options: NotifierOptions = {}): Notifier {
+  // The outbox is owned here; all pushes happen in this module.
   const outbox: OutboxEntry[] = [];
 
   // Select transport.
@@ -71,14 +79,14 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
     transport = options.transport;
   } else {
     const mailTransport = process.env['MAIL_TRANSPORT'] ?? 'noop';
-    transport = mailTransport === 'noop' ? createNoopTransport(outbox) : createRealTransport();
+    transport = mailTransport === 'noop' ? createNoopTransport() : createRealTransport();
   }
 
   const from = options.from ?? process.env['MAIL_FROM'] ?? 'alerts@berkeley-seat-sniper.local';
 
   // Idempotency store: keys are `${subscriberId}:${classKey}:${openedAt}`.
-  // Using a Set gives O(1) lookup and is sufficient for a single-process
-  // notifier. A persistent store (Redis/DB) would be needed for multi-process.
+  // A Set is sufficient for a single-process notifier. For multi-process
+  // deployments, back this with a Redis SETNX or a DB unique constraint.
   const deliveredKeys = new Set<string>();
 
   // ---------------------------------------------------------------------------
@@ -88,7 +96,8 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
   async function dispatch(event: NotifyEvent): Promise<DispatchResult> {
     const key = `${event.subscriberId}:${event.classKey}:${event.openedAt}`;
 
-    // Idempotency check — synchronous, before any await.
+    // Idempotency check — synchronous, before any await, so a concurrent
+    // duplicate call (e.g. fan-out race) is reliably blocked.
     if (deliveredKeys.has(key)) {
       console.log(
         JSON.stringify({
@@ -102,8 +111,7 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
       return { sent: false, idempotencyKey: key };
     }
 
-    // Claim the key before awaiting the transport so a concurrent duplicate
-    // call (e.g. fan-out race) is blocked rather than double-sent.
+    // Claim the key before awaiting so a concurrent call is blocked.
     deliveredKeys.add(key);
 
     const { subject, body } = renderSeatOpenEmail(event);
@@ -111,7 +119,7 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
     try {
       await transport.send({ to: event.email, from, subject, body });
     } catch (err) {
-      // Release the key so a retry attempt after a transient failure can re-try.
+      // Release the key so a retry after a transient failure can succeed.
       deliveredKeys.delete(key);
 
       // Log without the email address (AC-8).
@@ -129,13 +137,15 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
       throw err;
     }
 
-    // For the noop transport the outbox entry is pushed inside the transport's
-    // send; we annotate it with our idempotency key and subscriber id after
-    // the fact. For real transports the outbox is empty — that's intentional.
-    const lastEntry = outbox.at(-1);
-    if (lastEntry) {
-      lastEntry.idempotencyKey = key;
-    }
+    // Record in the outbox after successful delivery (Notifier owns the outbox).
+    outbox.push({
+      kind: 'subscriber',
+      to: event.email,
+      subject,
+      body,
+      sentAt: new Date().toISOString(),
+      idempotencyKey: key,
+    });
 
     // Structured log — subscriberId only, never the email (AC-8).
     console.log(
@@ -162,23 +172,8 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
 
     const { subject, body } = renderOperatorAlert(classKey, detail);
 
-    // Push a distinct 'operator' entry directly to the outbox so tests can
-    // assert exactly: one operator alert AND zero subscriber entries (AC-5).
-    // We do this before the transport call so the record exists even if the
-    // send fails (operator alerts are best-effort; the important thing is that
-    // the incident is recorded in the outbox for the test harness / logging).
-    const operatorEntry: OutboxEntry = {
-      kind: 'operator',
-      to: operatorEmail,
-      subject,
-      body,
-      sentAt: new Date().toISOString(),
-      detail,
-    };
-    outbox.push(operatorEntry);
-
-    // Log the incident (class key is not PII; detail is operator-facing and
-    // must not contain subscriber emails — callers own that invariant).
+    // Log the incident (classKey is not PII; detail must not contain subscriber
+    // emails — callers own that invariant per constitution / §6).
     console.log(
       JSON.stringify({
         level: 'warn',
@@ -188,12 +183,14 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
       }),
     );
 
+    const sentAt = new Date().toISOString();
+
     try {
       await transport.send({ to: operatorEmail, from, subject, body });
     } catch (err) {
-      // Operator alert delivery failure is logged but not re-thrown — the
-      // incident is already recorded in the outbox; failing to email the
-      // operator is not a reason to crash the poll cycle.
+      // Operator alert delivery failure is logged but NOT re-thrown — failing to
+      // email the operator must not crash the poll cycle. The incident is always
+      // recorded in the outbox below.
       console.error(
         JSON.stringify({
           level: 'error',
@@ -203,6 +200,18 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
         }),
       );
     }
+
+    // Push a distinct 'operator' entry to the outbox. Tests can assert:
+    //   outbox.filter(e => e.kind === 'operator').length === 1   (AC-5)
+    //   outbox.filter(e => e.kind === 'subscriber').length === 0  (AC-5)
+    outbox.push({
+      kind: 'operator',
+      to: operatorEmail,
+      subject,
+      body,
+      sentAt,
+      detail,
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -221,3 +230,5 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
 // Re-export types the worker and test-engineer need.
 export type { Notifier, OutboxEntry, DispatchResult } from './types';
 export type { NotifyEvent } from '../shared/seat-state';
+// Re-export transport factory so tests can wire noop explicitly.
+export { createNoopTransport } from './transports/noop';

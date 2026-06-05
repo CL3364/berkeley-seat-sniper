@@ -147,10 +147,12 @@ function mapRepoError(e: unknown): Response {
   if (isNotFoundError(e)) {
     return errRes(apiError('not_found', 'subscriber not found'), API_ERROR_STATUS.not_found);
   }
-  // Unknown — log cause server-side; generic message to client.
+  // Unknown — log only the error CLASS, never `e.message`: a wrapped DB error's
+  // message embeds the SQL query + params, which can contain subscriber PII (AC-8).
+  // The client gets a generic message; the real cause stays out of the logs.
   console.error({
     event: 'internal_error',
-    message: e instanceof Error ? e.message : 'unknown error',
+    errorName: e instanceof Error ? e.constructor.name : 'unknown',
   });
   return errRes(
     apiError('internal_error', 'an unexpected error occurred'),

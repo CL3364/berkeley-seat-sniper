@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <!--
   Synthetic fixture: page whose enrollment structure has changed (e.g. after a
   site redesign). The expected enrollment nodes are absent.
@@ -7,19 +7,19 @@
   See fixtures/README.md for context.
 -->
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>COMPSCI 189 | UC Berkeley</title>
-</head>
-<body>
-  <!-- Enrollment section has been redesigned — the selectors the parser relies on
+  <head>
+    <meta charset="UTF-8" />
+    <title>COMPSCI 189 | UC Berkeley</title>
+  </head>
+  <body>
+    <!-- Enrollment section has been redesigned — the selectors the parser relies on
        (.enroll-numbers .available .count) are no longer present. -->
-  <div class="course-info">
-    <h1>Computer Science 189</h1>
-    <p>Enrollment information is unavailable in this page format.</p>
-    <div class="enrollment-widget" data-class-id="cs189">
-      <!-- New React-driven widget loads dynamically; no static HTML -->
+    <div class="course-info">
+      <h1>Computer Science 189</h1>
+      <p>Enrollment information is unavailable in this page format.</p>
+      <div class="enrollment-widget" data-class-id="cs189">
+        <!-- New React-driven widget loads dynamically; no static HTML -->
+      </div>
     </div>
-  </div>
-</body>
+  </body>
 </html>

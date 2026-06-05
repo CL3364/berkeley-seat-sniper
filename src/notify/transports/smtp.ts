@@ -139,14 +139,9 @@ async function sendViaResend(config: ResendConfig, message: TransportMessage): P
  *   const transporter = nodemailer.createTransport({ host, port, auth: { user, pass } });
  *   await transporter.sendMail({ from, to, subject, text: body });
  */
-async function sendViaSmtp(config: SmtpConfig, message: TransportMessage): Promise<void> {
-  // Destructure so TS confirms we used the config fields.
-  const { host, port, user } = config;
-  void host;
-  void port;
-  void user;
-
+async function sendViaSmtp(_config: SmtpConfig, message: TransportMessage): Promise<void> {
   // STUB: Replace with real nodemailer invocation (add nodemailer to deps).
+  // Required fields from _config: host, port, user, pass, from.
   throw new Error(
     'SMTP transport is a stub. Add nodemailer to dependencies and replace this throw ' +
       `with a real sendMail call. Message subject: ${message.subject}`,

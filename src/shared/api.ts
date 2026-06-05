@@ -145,7 +145,9 @@ export const API_ROUTES = {
     params: RemoveWatchParamsSchema,
     response: null,
     successStatus: 204,
-    errors: ['token_invalid', 'not_found', 'internal_error'],
+    // A non-canonical :classKey path param fails RemoveWatchParamsSchema
+    // (strict ClassKeySchema) → validation_error (400).
+    errors: ['validation_error', 'token_invalid', 'not_found', 'internal_error'],
   },
   unsubscribe: {
     method: 'DELETE',

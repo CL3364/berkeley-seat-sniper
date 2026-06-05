@@ -61,15 +61,38 @@ function assertClassKey(raw: string): ClassKey {
 }
 
 /**
- * Detect a Postgres / PGlite unique-violation error (SQLSTATE 23505).
- * PGlite surfaces the error code the same way node-postgres does.
+ * Walk the cause chain of an error (bounded to 8 hops) and return the Postgres
+ * constraint name if this is a unique-violation (SQLSTATE 23505), or undefined
+ * if it is not. Handles drizzle 0.45+ which wraps driver errors in a
+ * DrizzleQueryError with the original PGlite/node-postgres error on `.cause`.
+ *
+ * PGlite is Postgres-compatible and surfaces the same `code`/`constraint_name`
+ * fields as node-postgres, just nested one level deeper under drizzle's wrapper.
+ *
+ * Returns the constraint name string (e.g. `subscribers_email_unique`,
+ * `watches_subscriber_class_uq`) so callers can throw the right typed error.
+ * Returns an empty string '' when SQLSTATE 23505 is confirmed but no constraint
+ * name field is present (should not happen in practice).
  */
-function isUniqueViolation(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  // node-postgres attaches `.code`; PGlite mirrors this.
-  if ('code' in err && (err as NodeJS.ErrnoException).code === '23505') return true;
-  // Fallback for runtimes that surface the constraint name only in the message.
-  return err.message.includes('unique') || err.message.includes('UNIQUE');
+function uniqueViolationConstraint(err: unknown): string | undefined {
+  let e: unknown = err;
+  for (let i = 0; i < 8 && e != null; i++) {
+    if (typeof e === 'object' && e !== null) {
+      const obj = e as Record<string, unknown>;
+      if (obj['code'] === '23505') {
+        // node-postgres exposes `constraint`; PGlite exposes `constraint_name`.
+        const name =
+          typeof obj['constraint_name'] === 'string'
+            ? obj['constraint_name']
+            : typeof obj['constraint'] === 'string'
+              ? obj['constraint']
+              : '';
+        return name;
+      }
+    }
+    e = (e as { cause?: unknown }).cause;
+  }
+  return undefined;
 }
 
 /**
@@ -123,7 +146,10 @@ export async function createSubscriberWithWatches(
       const [subscriber] = await tx.insert(subscribers).values({ email }).returning();
       subscriberId = subscriber.id;
     } catch (err) {
-      if (isUniqueViolation(err)) {
+      // drizzle 0.45 wraps the driver error; walk the cause chain for SQLSTATE
+      // 23505. The only unique constraint on subscribers is `subscribers_email_unique`
+      // so any 23505 here is a duplicate email.
+      if (uniqueViolationConstraint(err) !== undefined) {
         throw new DuplicateSubscriberError(email);
       }
       throw err;
@@ -188,8 +214,16 @@ export async function addWatch(
   try {
     await db.insert(watches).values({ subscriberId, classKey: validatedKey });
   } catch (err) {
-    if (isUniqueViolation(err)) {
+    // drizzle 0.45 wraps the driver error; walk the cause chain for SQLSTATE
+    // 23505. Disambiguate by constraint name: watches_subscriber_class_uq is
+    // the only unique constraint on watches. Any other 23505 is re-thrown.
+    const constraint = uniqueViolationConstraint(err);
+    if (constraint === 'watches_subscriber_class_uq') {
       throw new DuplicateWatchError(subscriberId, validatedKey);
+    }
+    if (constraint !== undefined) {
+      // Unexpected unique violation on watches — re-throw as-is.
+      throw err;
     }
     throw err;
   }

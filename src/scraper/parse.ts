@@ -63,13 +63,10 @@ export function parseClassPage(html: string, classKey: ClassKey): ParseResult {
   // Absent node → conservatively treat as waitlist closed (not a parse break,
   // since some classes genuinely have no waitlist and the node may be omitted).
   const waitlistNode = root.querySelector('.waitlist-status');
-  const waitlistOpen = waitlistNode
-    ? waitlistNode.text.trim().toLowerCase() === 'open'
-    : false;
+  const waitlistOpen = waitlistNode ? waitlistNode.text.trim().toLowerCase() === 'open' : false;
 
   // --- Map to status ----------------------------------------------------------
-  const status: SeatStatus =
-    openSeats > 0 ? 'open' : waitlistOpen ? 'waitlist' : 'closed';
+  const status: SeatStatus = openSeats > 0 ? 'open' : waitlistOpen ? 'waitlist' : 'closed';
 
   return {
     classKey,
@@ -95,6 +92,7 @@ function parserBroke(
  * safe to embed in an operator `detail` string. Never include full HTML.
  */
 function sanitize(raw: string): string {
-  // Keep only printable ASCII/Unicode, truncate to 40 chars.
-  return raw.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 40);
+  // Strip C0 control characters and DEL using Unicode category Cc (control chars).
+  // Using \p{Cc} avoids embedding literal control-character ranges in the regex.
+  return raw.replace(/\p{Cc}/gu, '').slice(0, 40);
 }

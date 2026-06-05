@@ -66,7 +66,8 @@ missing subscriber → `not_found` (404).
   `200 { watches: ClassKey[] }` | `400 validation_error` | `401 token_invalid` |
   `404 not_found` | `409 conflict`
 - `DELETE /api/subscriptions/:token/watches/:classKey` (`:classKey` is canonical) →
-  `204` | `401 token_invalid` | `404 not_found`
+  `204` | `400 validation_error` (non-canonical `:classKey`) | `401 token_invalid` |
+  `404 not_found`
 - `DELETE /api/subscriptions/:token` (unsubscribe) → `204` | `401 token_invalid` |
   `404 not_found`
 - Shared types (`src/shared/`): `ClassKey` (branded) + `normalizeClassKey` (`class-key.ts`);
