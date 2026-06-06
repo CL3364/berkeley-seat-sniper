@@ -15,15 +15,21 @@ tests, and sequence so a future implementer (or the agent team) can start cold.
 | [0004](0004-term-scoped-expiry.md) | Term-scoped expiry of Watches + purge of Subscribers / Pending | [ADR 0003](../adr/0003-term-scoped-data-expiry.md) | Planned |
 | [0005](0005-passwordless-resend-and-rate-limiting.md) | Non-enumerating "resend my link" + rate limits (implements 429) | [ADR 0005](../adr/0005-passwordless-recovery-non-enumerating-and-rate-limited.md) | Planned |
 | [0006](0006-reservation-aware-alerting-and-eligibility.md) | Reservation-aware alerting: parse reserved-seat groups + per-Subscriber eligibility (depends on 0001) | [ADR 0006](../adr/0006-reserved-seats-v1-is-blind-eligibility-deferred.md) | Planned |
+| [0007](0007-launch-tuning-backlog.md) | Small launch tweaks: alert-cap, cadence default, opening-kind copy, List-Unsubscribe | — | Planned |
+| [0008](0008-email-deliverability-setup.md) | Email deliverability: provider + authed subdomain (SPF/DKIM/DMARC) + bounce hygiene | [ADR 0007](../adr/0007-transactional-provider-authed-subdomain.md) | Planned |
 
 ## Suggested build order
 
-1. **0003 double opt-in** + **0005 resend/rate-limit** together — they share the
-   email-sending + token-delivery surface and are launch-blockers for safe email.
+1. **0008 email deliverability** + **0003 double opt-in** + **0005 resend/rate-limit** —
+   the email channel must actually land (0008) before double opt-in (0003) makes mail a
+   hard signup dependency; all three share the sending/token-delivery surface and are the
+   launch-blockers for safe, deliverable email.
 2. **0001 SIS API** — removes the scraping brittleness/ToS risk and gives reliable section
-   enumeration that 0002 depends on.
-3. **0004 term expiry** — small, can land any time after the schema is stable.
-4. **0002 course-level Watches** — the headline next feature; do it on top of 0001.
+   enumeration that 0002 and 0006 depend on.
+3. **0004 term expiry** + **0007 tuning backlog** — small, can land any time after the
+   schema is stable.
+4. **0002 course-level Watches** and **0006 reservation-aware alerting** — the headline
+   next features; both sit on top of 0001.
 
 Each plan is self-contained; the architect versions `src/shared` first for any that change
 the contract (0001 maybe, 0002, 0003, 0005), then the lanes follow.
