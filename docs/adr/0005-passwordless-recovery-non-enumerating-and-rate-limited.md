@@ -38,5 +38,5 @@ Recovery is a single **"email me my Manage link"** endpoint with these propertie
 
 ## Alternatives considered
 
-- *Rate-limit only, no resend* — leaves the lockout unsolved.
-- *Resend from the manage UI only* — circular (you need the link to reach the UI).
+- _Rate-limit only, no resend_ — leaves the lockout unsolved.
+- _Resend from the manage UI only_ — circular (you need the link to reach the UI).

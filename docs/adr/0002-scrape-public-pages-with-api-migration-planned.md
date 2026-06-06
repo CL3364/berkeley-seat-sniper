@@ -44,8 +44,8 @@ the scraping launch:
 
 ## Alternatives considered
 
-- *Re-architect onto the official API now* — more robust and ToS-clean from day one, but
+- _Re-architect onto the official API now_ — more robust and ToS-clean from day one, but
   re-does the working scraper lane and adds registration + a managed key before launch.
   Deferred, not rejected: it is the intended end state.
-- *Commit to scraping permanently* — rejected; it treats a known-brittle, block-prone,
+- _Commit to scraping permanently_ — rejected; it treats a known-brittle, block-prone,
   grey-area source as load-bearing forever.

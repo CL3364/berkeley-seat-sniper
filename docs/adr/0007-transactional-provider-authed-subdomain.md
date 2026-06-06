@@ -32,8 +32,8 @@ List-Unsubscribe** header (RFC 8058) on every message.
 
 ## Alternatives considered
 
-- *Raw SMTP via a generic/department mailbox* — cheapest, but poor deliverability at
+- _Raw SMTP via a generic/department mailbox_ — cheapest, but poor deliverability at
   volume, shared-domain reputation, and hard rate caps. Rejected for a time-critical
   alerter.
-- *Defer hygiene* — rejected; early spam-foldering poisons reputation from day one, which
+- _Defer hygiene_ — rejected; early spam-foldering poisons reputation from day one, which
   is precisely what ADR 0001 set out to prevent.

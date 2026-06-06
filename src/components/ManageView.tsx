@@ -9,6 +9,9 @@
  *
  * Accessibility: WCAG 2.1 AA. Every action has a visible label, keyboard
  * operability, and focus management after destructive actions.
+ *
+ * Validation visibility rule: add-watch field errors only show after the field
+ * has been touched (blurred) or a submit attempt has occurred.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -38,6 +41,7 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
   const [load, setLoad] = useState<LoadState>({ status: 'loading' });
   const [newClass, setNewClass] = useState('');
   const [addError, setAddError] = useState<string | undefined>(undefined);
+  const [addFieldTouched, setAddFieldTouched] = useState(false);
   const [addBusy, setAddBusy] = useState(false);
   const [removeBusy, setRemoveBusy] = useState<ClassKey | null>(null);
   const [unsubBusy, setUnsubBusy] = useState(false);
@@ -90,6 +94,8 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
   async function handleAddWatch(e: React.FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     setActionError(undefined);
+    // Mark touched so the error message becomes visible if validation fails
+    setAddFieldTouched(true);
     const err = validateNewClass(newClass);
     setAddError(err);
     if (err) return;
@@ -104,6 +110,7 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
       );
       setNewClass('');
       setAddError(undefined);
+      setAddFieldTouched(false);
     } catch (err) {
       if (err instanceof ApiClientError) {
         if (err.error.code === 'conflict') {
@@ -264,7 +271,7 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
             void handleAddWatch(e);
           }}
           noValidate
-          aria-describedby={addError ? 'add-class-error' : undefined}
+          aria-describedby={addFieldTouched && addError ? 'add-class-error' : undefined}
         >
           <div className="field">
             <label htmlFor="add-class">Class URL or code</label>
@@ -274,16 +281,20 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
               value={newClass}
               onChange={(e) => {
                 setNewClass(e.target.value);
-                if (addError) setAddError(validateNewClass(e.target.value));
+                // Re-validate on change only after the field has been touched
+                if (addFieldTouched) setAddError(validateNewClass(e.target.value));
               }}
-              onBlur={() => setAddError(validateNewClass(newClass))}
+              onBlur={() => {
+                setAddFieldTouched(true);
+                setAddError(validateNewClass(newClass));
+              }}
               aria-required="true"
-              aria-invalid={addError !== undefined}
-              aria-describedby={addError ? 'add-class-error' : undefined}
+              aria-invalid={addFieldTouched && addError !== undefined}
+              aria-describedby={addFieldTouched && addError ? 'add-class-error' : undefined}
               placeholder="e.g. 2026-fall-compsci-189-001-lec-001"
               disabled={addBusy || unsubBusy}
             />
-            {addError && (
+            {addFieldTouched && addError && (
               <span id="add-class-error" role="alert" className="field-error">
                 {addError}
               </span>

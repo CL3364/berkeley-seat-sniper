@@ -1,8 +1,9 @@
 import { PGlite } from '@electric-sql/pglite';
+import { is } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import type { PgliteDatabase } from 'drizzle-orm/pglite';
+import { PgliteDatabase } from 'drizzle-orm/pglite';
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator';
 import pg from 'pg';
@@ -23,9 +24,10 @@ export type Db = NodePgDatabase<typeof schema> | PgliteDatabase<typeof schema>;
 let _db: Db | undefined;
 
 /**
- * Return the shared DB instance, creating it on first call.
+ * Return the shared DB instance, creating it on first call. Subsequent calls
+ * return the SAME instance — the migrated db and the repo share one connection.
  *
- * Driver selection (no docker required for tests):
+ * Driver selection (no docker required for dev/tests):
  *   - DATABASE_URL set → real Postgres via node-postgres Pool
  *   - DATABASE_URL absent → in-process PGlite (zero external services)
  *
@@ -48,23 +50,35 @@ export function getDb(): Db {
 }
 
 /**
- * Apply all pending migrations to the given DB instance.
+ * Apply all pending migrations to the given DB instance. Safe to call on every
+ * boot — Drizzle's migrator is idempotent (it tracks applied migrations in
+ * `__drizzle_migrations` and skips already-applied ones).
  *
- * For real Postgres: uses drizzle-orm/node-postgres/migrator.
- * For PGlite: uses drizzle-orm/pglite/migrator.
+ * Intended call site: `await runMigrations(getDb())` in the server bootstrap,
+ * BEFORE any request handler runs or any repo function is invoked.
  *
- * Called by src/db/migrate.ts at server start, and by makeTestDb() in tests.
- * The migrations folder is always `./drizzle` (relative to the project root).
+ * Migrator selection is based on the actual db instance type (via drizzle's
+ * `is()` helper) rather than env-var presence. This is robust when, e.g., a
+ * test passes a PgliteDatabase while DATABASE_URL happens to be set.
+ *
+ * CWD assumption: `migrationsFolder` is resolved relative to `process.cwd()`.
+ * The server must be started from the project root (the directory that contains
+ * `drizzle/`) — i.e. `node dist/server/index.js` or `tsx src/server/index.ts`
+ * from the repo root. Docker / CI must set the working directory accordingly.
+ *
+ * Also called by makeTestDb() and src/db/migrate.ts.
  */
 export async function runMigrations(db: Db): Promise<void> {
   const migrationsFolder = './drizzle';
 
-  // Discriminate by DATABASE_URL presence so the correct migrator is used.
-  // makeTestDb() always passes a PgliteDatabase and does not set DATABASE_URL.
-  if (process.env.DATABASE_URL) {
-    await migrate(db as NodePgDatabase<typeof schema>, { migrationsFolder });
+  // Discriminate on the actual db instance, not on DATABASE_URL, so that
+  // makeTestDb() (which always creates a PgliteDatabase) works correctly even
+  // when DATABASE_URL is set in the environment.
+  if (is(db, PgliteDatabase)) {
+    await migratePglite(db, { migrationsFolder });
   } else {
-    await migratePglite(db as PgliteDatabase<typeof schema>, { migrationsFolder });
+    // NodePgDatabase — safe cast: the only other Db variant is NodePgDatabase
+    await migrate(db as NodePgDatabase<typeof schema>, { migrationsFolder });
   }
 }
 
@@ -82,6 +96,7 @@ export async function runMigrations(db: Db): Promise<void> {
 export async function makeTestDb(): Promise<PgliteDatabase<typeof schema>> {
   const pglite = new PGlite();
   const db = drizzlePglite(pglite, { schema });
-  await migratePglite(db, { migrationsFolder: './drizzle' });
+  // Re-use runMigrations so the test path exercises the same code as production.
+  await runMigrations(db);
   return db;
 }

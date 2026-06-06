@@ -11,6 +11,9 @@
  * Accessibility: WCAG 2.1 AA. All inputs have associated <label>s. Errors are
  * linked to their field via aria-describedby. Status messages use role="status"
  * (polite) or role="alert" (assertive) as appropriate.
+ *
+ * Validation visibility rule: errors are only shown after a field has been
+ * touched (blurred) or a submit attempt has occurred — never on first paint.
  */
 
 import React, { useState } from 'react';
@@ -26,8 +29,10 @@ import type { CreateSubscriptionResponse } from '../shared/api';
 interface ClassEntry {
   id: number;
   value: string;
-  /** null = not yet validated; string = error message; undefined = valid */
-  error: string | null | undefined;
+  /** undefined = valid; string = error message */
+  error: string | undefined;
+  /** true once the field has been blurred at least once */
+  touched: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -36,7 +41,7 @@ interface ClassEntry {
 
 let _nextId = 0;
 function newEntry(value = ''): ClassEntry {
-  return { id: _nextId++, value, error: null };
+  return { id: _nextId++, value, error: undefined, touched: false };
 }
 
 function validateEmail(email: string): string | undefined {
@@ -63,6 +68,7 @@ function validateClassEntry(value: string): string | undefined {
 export function SubscribeView(): React.ReactElement {
   const [email, setEmail] = useState('');
   const [emailError, setEmailError] = useState<string | undefined>(undefined);
+  const [emailTouched, setEmailTouched] = useState(false);
   const [classEntries, setClassEntries] = useState<ClassEntry[]>([newEntry()]);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | undefined>(undefined);
@@ -77,6 +83,7 @@ export function SubscribeView(): React.ReactElement {
   }
 
   function handleEmailBlur(): void {
+    setEmailTouched(true);
     setEmailError(validateEmail(email));
   }
 
@@ -86,7 +93,7 @@ export function SubscribeView(): React.ReactElement {
     setClassEntries((prev) =>
       prev.map((entry) =>
         entry.id === id
-          ? { ...entry, value, error: entry.error !== null ? validateClassEntry(value) : null }
+          ? { ...entry, value, error: entry.touched ? validateClassEntry(value) : entry.error }
           : entry,
       ),
     );
@@ -95,7 +102,9 @@ export function SubscribeView(): React.ReactElement {
   function handleClassBlur(id: number): void {
     setClassEntries((prev) =>
       prev.map((entry) =>
-        entry.id === id ? { ...entry, error: validateClassEntry(entry.value) } : entry,
+        entry.id === id
+          ? { ...entry, touched: true, error: validateClassEntry(entry.value) }
+          : entry,
       ),
     );
   }
@@ -117,12 +126,15 @@ export function SubscribeView(): React.ReactElement {
     e.preventDefault();
     setFormError(undefined);
 
-    // Validate all fields eagerly before sending anything (AC-2)
+    // Validate all fields eagerly before sending anything (AC-2).
+    // Mark every field touched so errors surface regardless of prior interaction.
     const emailErr = validateEmail(email);
+    setEmailTouched(true);
     setEmailError(emailErr);
 
     const validatedEntries = classEntries.map((entry) => ({
       ...entry,
+      touched: true,
       error: validateClassEntry(entry.value),
     }));
     setClassEntries(validatedEntries);
@@ -191,15 +203,12 @@ export function SubscribeView(): React.ReactElement {
             </li>
           ))}
         </ul>
-        <p>Manage your watches with your personal link (save this — it is the only way back):</p>
+        <p>Save your manage link — it is the only way back to your watches:</p>
         <p>
           <a href={manageUrl} aria-label="your manage link">
             {window.location.origin}
             {manageUrl}
           </a>
-        </p>
-        <p role="status" aria-live="polite">
-          A confirmation with your manage link will be emailed to you.
         </p>
       </section>
     );
@@ -239,11 +248,11 @@ export function SubscribeView(): React.ReactElement {
             onChange={handleEmailChange}
             onBlur={handleEmailBlur}
             aria-required="true"
-            aria-invalid={emailError !== undefined}
-            aria-describedby={emailError ? 'email-error' : undefined}
+            aria-invalid={emailTouched && emailError !== undefined}
+            aria-describedby={emailTouched && emailError ? 'email-error' : undefined}
             disabled={submitting}
           />
-          {emailError && (
+          {emailTouched && emailError && (
             <span id="email-error" role="alert" className="field-error">
               {emailError}
             </span>
@@ -271,8 +280,8 @@ export function SubscribeView(): React.ReactElement {
                     onChange={(e) => handleClassChange(entry.id, e.target.value)}
                     onBlur={() => handleClassBlur(entry.id)}
                     aria-required="true"
-                    aria-invalid={entry.error !== undefined && entry.error !== null}
-                    aria-describedby={entry.error ? errorId : undefined}
+                    aria-invalid={entry.touched && entry.error !== undefined}
+                    aria-describedby={entry.touched && entry.error ? errorId : undefined}
                     placeholder="e.g. 2026-fall-compsci-189-001-lec-001"
                     disabled={submitting}
                   />
@@ -287,7 +296,7 @@ export function SubscribeView(): React.ReactElement {
                     </button>
                   )}
                 </div>
-                {entry.error !== null && entry.error !== undefined && (
+                {entry.touched && entry.error !== undefined && (
                   <span id={errorId} role="alert" className="field-error">
                     {entry.error}
                   </span>

@@ -47,13 +47,13 @@ seats, or Reserved seats in a group they're in).
   is per-person, not per-watch. Decide: per-Subscriber (simpler) vs per-Watch (a student
   may be major-eligible for one course but not another — likely per-Subscriber by
   standing, per-Course-major for major reservations; start per-Subscriber).
-- `class_state` may need to store the per-group last-availability to detect a *group-level*
+- `class_state` may need to store the per-group last-availability to detect a _group-level_
   0→>0 transition (a general 0→>0 vs a reserved-group 0→>0 are different Openings).
 
 ## Worker lane
 
 - Transition detection becomes per-eligible-pool: for each Subscriber, compute the seats
-  they're eligible for (general + their groups) and detect 0→>0 on *that* number, so two
+  they're eligible for (general + their groups) and detect 0→>0 on _that_ number, so two
   Subscribers watching the same Section can legitimately get different Alert outcomes.
 - Respect reservation release dates: once a reservation releases, its seats fold into
   General for everyone.

@@ -11,9 +11,10 @@ subdomain, and unsubscribe/bounce hygiene. Replaces the `smtp.ts` stub.
 ## Provider
 
 - Pick one transactional provider (Resend, Postmark, or Amazon SES). Decision criteria:
-  deliverability reputation, simple API, bounce/complaint webhooks, cost at expected
-  volume. (Postmark = great transactional deliverability; SES = cheapest at scale; Resend
-  = simplest DX.) Record the choice here when made.
+  deliverability reputation, a clean sending interface, webhooks for bounces and
+  complaints, and cost at expected volume. (Postmark = great transactional deliverability;
+  SES = cheapest at scale; Resend = simplest developer experience.) Record the choice here
+  when made.
 - Key from env only (`MAIL_PROVIDER`, `<PROVIDER>_API_KEY`); never hardcode/log.
 
 ## DNS / domain auth (the deliverability core)

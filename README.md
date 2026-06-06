@@ -26,6 +26,29 @@ npm run dev:server    # Hono API on :8787
 npm run dev:web       # Vite dashboard on :5173 (proxies /api -> :8787)
 ```
 
+## Run in production (single process)
+
+The server runs DB migrations on boot, then serves the built dashboard **and** the API on
+one port; the worker is a second process. See [ADR 0008](docs/adr/0008-single-process-migrate-on-boot-deploy.md).
+
+```bash
+npm run build         # tsc + vite → dist/web
+TOKEN_SECRET=... DATABASE_URL=postgres://... npm start   # serves SPA + /api on :8787
+TOKEN_SECRET=... DATABASE_URL=postgres://... npm run worker   # the poller (separate process)
+```
+
+Or with containers (Postgres + app + worker):
+
+```bash
+# set POSTGRES_PASSWORD, TOKEN_SECRET, etc. in .env (gitignored)
+docker compose up --build
+```
+
+`GET /api/health` returns `200 {"status":"ok"}` for liveness checks. With no `DATABASE_URL`,
+the app falls back to an in-process Postgres (PGlite) — fine for local/dev, not for
+production. Before a public launch, see the pre-launch gates in [docs/plans/](docs/plans/)
+(email deliverability `0008`, double opt-in `0003`, rate-limit/resend `0005`).
+
 ## Verify (the layered gates)
 
 ```bash

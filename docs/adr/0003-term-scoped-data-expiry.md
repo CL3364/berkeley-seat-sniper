@@ -42,7 +42,7 @@ Retention is **term-scoped**:
 
 ## Alternatives considered
 
-- *Manual-only lifecycle* — data lives until the Subscriber acts; operators purge by hand.
+- _Manual-only lifecycle_ — data lives until the Subscriber acts; operators purge by hand.
   Rejected: unbounded stale data, dead-Section polling, and a growing PII pile.
-- *Global TTL (N days from creation)* — simple and bounded, but arbitrary: it can expire a
+- _Global TTL (N days from creation)_ — simple and bounded, but arbitrary: it can expire a
   still-valid Watch mid-Term or retain a dead one when a Term is short.

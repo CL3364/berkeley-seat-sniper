@@ -25,6 +25,7 @@ import { apiError, API_ERROR_STATUS } from '../shared/errors';
 import type { ClassKey } from '../shared/class-key';
 import { mintToken, verifyToken } from './token';
 import { isConflictError, isNotFoundError } from './db-errors';
+import { rateLimitMiddleware } from './rate-limit';
 
 // ---------------------------------------------------------------------------
 // Repo interface — implemented by `src/db` and injected via createApp(repo).
@@ -168,9 +169,17 @@ export function createApp(repo: SubscriptionRepo): Hono {
   const app = new Hono();
 
   // -------------------------------------------------------------------------
-  // POST /api/subscriptions  →  201 { subscriberId, token, watches }
+  // GET /api/health  →  200 { status: 'ok' }
+  // No auth, no rate-limit. Cheap liveness probe for container orchestration;
+  // does NOT touch the DB so it stays fast even under load.
   // -------------------------------------------------------------------------
-  app.post('/api/subscriptions', async (c) => {
+  app.get('/api/health', (c) => c.json({ status: 'ok' }, 200));
+
+  // -------------------------------------------------------------------------
+  // POST /api/subscriptions  →  201 { subscriberId, token, watches }
+  // Rate-limited per-IP (RATE_LIMIT_SUBSCRIBE_MAX / RATE_LIMIT_WINDOW_SECONDS).
+  // -------------------------------------------------------------------------
+  app.post('/api/subscriptions', rateLimitMiddleware(), async (c) => {
     let body: unknown;
     try {
       body = await c.req.json();

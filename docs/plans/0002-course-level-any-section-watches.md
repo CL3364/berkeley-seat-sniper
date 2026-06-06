@@ -46,7 +46,7 @@ getting one Alert per Section.
 ## Schema (db lane)
 
 - `course_watches(id, subscriber_id FK, course_key, satisfied bool default false,
-  created_at)`, unique `(subscriber_id, course_key)`, index `(course_key)`.
+created_at)`, unique `(subscriber_id, course_key)`, index `(course_key)`.
 - `course_sections(course_key, class_key, term, last_seen_at)` — the enumerated section set
   per Course, refreshed by the worker; index `(course_key)`.
 - Term-scoped expiry (ADR 0003 / Plan 0004) applies to Course Watches too.

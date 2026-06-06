@@ -7,7 +7,7 @@ conversation uses a word, the conflict gets resolved here first.
 ## Glossary
 
 - **Subscriber** — a person who has asked to be alerted, identified solely by an email
-  address. There is no password and no account; the email *is* the identity.
+  address. There is no password and no account; the email _is_ the identity.
 
 - **Pending Subscriber** — a Subscriber who has not yet proven control of their email.
   Receives no Alerts.
@@ -38,11 +38,10 @@ conversation uses a word, the conflict gets resolved here first.
 - **Opening** — the umbrella event that triggers an Alert: a watched Section becoming
   reachable in a way it was not a moment ago. There are two distinct kinds, and an Alert
   always names which one:
-
   - **Seat Opening** — a Section transitioning from "no seat available" to "at least one
     open seat." Seats are first-come-first-served and do **not** cascade down the
     waitlist, so a Seat Opening is a race. This is the primary event. A Seat Opening is a
-    *real* opportunity for a Subscriber only if the freed seat is a General Seat, or a
+    _real_ opportunity for a Subscriber only if the freed seat is a General Seat, or a
     Reserved Seat in a Reservation Group the Subscriber belongs to — v1 cannot tell these
     apart and treats every open seat alike (see ADR 0006).
 

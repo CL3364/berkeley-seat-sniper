@@ -1,0 +1,16 @@
+# gitleaks configuration for Berkeley Seat Sniper.
+#
+# Extends the default ruleset (all built-in secret rules stay active) and adds a
+# narrow allowlist: documentation markdown under docs/ is design PROSE that refers
+# to secrets only by environment-variable NAME (TOKEN_SECRET, *_API_KEY) and
+# discusses providers/keys abstractly. The default generic-api-key heuristic
+# produces false positives on that prose. Application code, configs, Dockerfiles,
+# compose files, CI, and env files are STILL fully scanned for real secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation prose (docs/**/*.md) references secrets by env-var name only; exclude it from secret scanning to avoid generic-key false positives. All code/config remains scanned."
+paths = [
+  '''docs/.*\.md$''',
+]

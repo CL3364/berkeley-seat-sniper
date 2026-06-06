@@ -13,8 +13,8 @@ email address. Consequences:
   `victim@berkeley.edu`) to many Sections, and that inbox immediately starts receiving
   Alerts it never asked for.
 - **Deliverability risk (existential).** Unsolicited Alerts get marked as spam. For an
-  email-based alerter, the sending domain's reputation *is* the product — once it is
-  flagged, even *wanted* Alerts stop reaching inboxes. There is no recovering the value
+  email-based alerter, the sending domain's reputation _is_ the product — once it is
+  flagged, even _wanted_ Alerts stop reaching inboxes. There is no recovering the value
   proposition (speed of notification) if the mail doesn't land.
 
 The competing value was frictionless signup: returning the token in the body let the
@@ -46,9 +46,9 @@ least once) receive Alerts.
 
 ## Alternatives considered
 
-- *Create now, gate only Alerts on confirm* — keep returning the token but send no
+- _Create now, gate only Alerts on confirm_ — keep returning the token but send no
   Alerts until confirmed. Lower friction, but still hands an unauthenticated caller a
   working Manage token for an address they may not own.
-- *Ship as-is for a trusted launch* — accept the risk for a small known audience.
+- _Ship as-is for a trusted launch_ — accept the risk for a small known audience.
   Rejected: the deliverability blast radius is not contained to the abuser; one spam
   flag degrades the channel for every Subscriber.
