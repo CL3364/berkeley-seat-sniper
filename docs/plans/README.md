@@ -14,6 +14,7 @@ tests, and sequence so a future implementer (or the agent team) can start cold.
 | [0003](0003-double-opt-in-and-confirmation.md) | Double opt-in: confirm email before alerting; token no longer in the subscribe response | [ADR 0001](../adr/0001-double-opt-in-before-alerting.md) | Planned |
 | [0004](0004-term-scoped-expiry.md) | Term-scoped expiry of Watches + purge of Subscribers / Pending | [ADR 0003](../adr/0003-term-scoped-data-expiry.md) | Planned |
 | [0005](0005-passwordless-resend-and-rate-limiting.md) | Non-enumerating "resend my link" + rate limits (implements 429) | [ADR 0005](../adr/0005-passwordless-recovery-non-enumerating-and-rate-limited.md) | Planned |
+| [0006](0006-reservation-aware-alerting-and-eligibility.md) | Reservation-aware alerting: parse reserved-seat groups + per-Subscriber eligibility (depends on 0001) | [ADR 0006](../adr/0006-reserved-seats-v1-is-blind-eligibility-deferred.md) | Planned |
 
 ## Suggested build order
 

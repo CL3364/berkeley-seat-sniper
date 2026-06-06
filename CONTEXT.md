@@ -40,13 +40,27 @@ conversation uses a word, the conflict gets resolved here first.
   always names which one:
 
   - **Seat Opening** — a Section transitioning from "no seat available" to "at least one
-    enrollable seat available." Seats are first-come-first-served and do **not** cascade
-    down the waitlist, so a Seat Opening is a race. This is the primary event.
+    open seat." Seats are first-come-first-served and do **not** cascade down the
+    waitlist, so a Seat Opening is a race. This is the primary event. A Seat Opening is a
+    *real* opportunity for a Subscriber only if the freed seat is a General Seat, or a
+    Reserved Seat in a Reservation Group the Subscriber belongs to — v1 cannot tell these
+    apart and treats every open seat alike (see ADR 0006).
 
   - **Waitlist Opening** — a Section whose waitlist was full transitioning to having room
     on the waitlist. It does not grant a seat — only the ability to join the line — but
     when the waitlist itself is capped in a hot Section, getting in line fast is its own
     win. Secondary to a Seat Opening, and never described as a seat.
+
+- **General Seat** — a seat any eligible enrollee may take.
+
+- **Reserved Seat** — a seat held for a specific Reservation Group; only students in that
+  group may take it, even when it shows as open. A freed Reserved Seat generally returns
+  to its group's pool (it does **not** become General) until the reservation is released.
+
+- **Reservation Group** — the population a Reserved Seat is held for: a major, a class
+  standing / number of terms completed, first-years, transfers, etc. A Section may have
+  several, each with its own seat count. Some Sections release all reservations on a fixed
+  date (often the first day of instruction), after which those seats become General.
 
 - **Alert** — a single outbound notification to one Confirmed Subscriber that a Section
   they Watch has had an Opening. The Alert states which kind of Opening (Seat or Waitlist)
