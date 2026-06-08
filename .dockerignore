@@ -1,0 +1,36 @@
+# Exclude build artifacts (builder stage generates fresh output).
+node_modules
+dist
+
+# VCS and editor metadata.
+.git
+.gitignore
+.prettierignore
+.prettierrc.json
+
+# Secrets and env files — NEVER baked into the image.
+.env
+.env.*
+*.key
+*.pem
+*vapid*
+
+# Test/QA directories not needed in production images.
+tests
+e2e
+coverage
+
+# Documentation files.
+*.md
+CLAUDE.md
+RUNBOOK.md
+CONTEXT.md
+constitution.md
+
+# Playwright artifacts.
+playwright-report
+test-results
+
+# Editor and OS metadata.
+.DS_Store
+*.swp

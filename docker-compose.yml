@@ -1,0 +1,81 @@
+# docker-compose.yml — local and staging orchestration for Berkeley Seat Sniper.
+#
+# Services:
+#   db     — Postgres 16 with a named volume and a healthcheck.
+#   app    — the Hono server; serves /api/* and the SPA (dist/web).
+#   worker — the seat-sniper poller. Shares the same image as `app` (built once
+#            from the Dockerfile); started with `npm run worker` instead of the
+#            default CMD so the two processes are independently restartable.
+#
+# Secrets are NEVER hardcoded here. Provide them in a .env file (gitignored) or
+# via your deploy environment. See env.example for the full variable list.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: seatsniper
+      POSTGRES_USER: seatsniper
+      # POSTGRES_PASSWORD must be set in your .env — never hardcoded.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U seatsniper -d seatsniper']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - '8787:8787'
+    environment:
+      NODE_ENV: production
+      PORT: 8787
+      # DATABASE_URL points to the db service; password interpolated from env.
+      DATABASE_URL: postgres://seatsniper:${POSTGRES_PASSWORD}@db:5432/seatsniper
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-2592000}
+      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-noop}
+      MAIL_FROM: ${MAIL_FROM:-alerts@example.edu}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SMTP_URL: ${SMTP_URL:-}
+      FETCH_USER_AGENT: ${FETCH_USER_AGENT:-BerkeleySeatSniper/0.2 (+mailto:ops@example.edu)}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-120}
+      POLL_JITTER_SECONDS: ${POLL_JITTER_SECONDS:-20}
+      KILL_SWITCH: ${KILL_SWITCH:-0}
+      RESPECT_ROBOTS: ${RESPECT_ROBOTS:-1}
+
+  # worker shares the same image as app (no second build). It runs the poller
+  # process independently so it can be restarted without touching the HTTP server.
+  worker:
+    build: .
+    # Override the default CMD to run the worker process instead of the server.
+    command: ['node_modules/.bin/tsx', 'src/worker/index.ts']
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://seatsniper:${POSTGRES_PASSWORD}@db:5432/seatsniper
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-noop}
+      MAIL_FROM: ${MAIL_FROM:-alerts@example.edu}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SMTP_URL: ${SMTP_URL:-}
+      FETCH_USER_AGENT: ${FETCH_USER_AGENT:-BerkeleySeatSniper/0.2 (+mailto:ops@example.edu)}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-120}
+      POLL_JITTER_SECONDS: ${POLL_JITTER_SECONDS:-20}
+      KILL_SWITCH: ${KILL_SWITCH:-0}
+      RESPECT_ROBOTS: ${RESPECT_ROBOTS:-1}
+
+volumes:
+  db_data:

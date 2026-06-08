@@ -1,0 +1,307 @@
+/*
+ * app.css — minimal, accessible stylesheet for the Berkeley Seat Sniper dashboard.
+ * WCAG 2.1 AA: colour contrast ≥ 4.5:1 for normal text, ≥ 3:1 for large text
+ * and UI components. Visible focus ring on every interactive element.
+ * No framework dependency — plain CSS only.
+ */
+
+/* ---- Reset & base -------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 100%; /* respects user browser font size setting */
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: #1a1a1a; /* > 7:1 on white */
+  background: #ffffff;
+}
+
+/* ---- Skip link ----------------------------------------------------------- */
+
+.skip-link {
+  position: absolute;
+  top: -999px;
+  left: 0;
+  background: #0057b8;
+  color: #ffffff;
+  padding: 0.5rem 1rem;
+  z-index: 999;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* ---- Focus ring ---------------------------------------------------------- */
+
+:focus-visible {
+  outline: 3px solid #0057b8;
+  outline-offset: 2px;
+}
+
+/* ---- Layout -------------------------------------------------------------- */
+
+header,
+main,
+footer {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem;
+}
+
+header {
+  border-bottom: 1px solid #ddd;
+}
+
+header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+}
+
+header h1 a {
+  color: inherit;
+  text-decoration: none;
+}
+
+header h1 a:hover,
+header h1 a:focus-visible {
+  text-decoration: underline;
+}
+
+header p {
+  margin: 0;
+  color: #444;
+}
+
+footer {
+  border-top: 1px solid #ddd;
+  font-size: 0.875rem;
+  color: #555;
+}
+
+/* ---- Typography ---------------------------------------------------------- */
+
+h2 {
+  font-size: 1.25rem;
+  margin: 0 0 1rem;
+}
+
+h3 {
+  font-size: 1rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+p {
+  margin: 0 0 0.75rem;
+}
+
+code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.875em;
+  background: #f4f4f4;
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+}
+
+ul {
+  padding-left: 1.25rem;
+  margin: 0 0 0.75rem;
+}
+
+li {
+  margin-bottom: 0.25rem;
+}
+
+/* ---- Form elements ------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+}
+
+label {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+input[type='text'],
+input[type='email'] {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font-size: 1rem;
+  font-family: inherit;
+  border: 1px solid #767676; /* ≥ 3:1 against white for UI components */
+  border-radius: 4px;
+  background: #fff;
+  color: #1a1a1a;
+  appearance: none;
+}
+
+input[type='text']:focus,
+input[type='email']:focus {
+  outline: 3px solid #0057b8;
+  outline-offset: 1px;
+  border-color: #0057b8;
+}
+
+input[aria-invalid='true'] {
+  border-color: #b00020; /* error red, still ≥ 3:1 */
+}
+
+input:disabled {
+  background: #f0f0f0;
+  color: #555;
+  cursor: not-allowed;
+}
+
+/* ---- Fieldset ------------------------------------------------------------ */
+
+fieldset {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  padding: 1rem;
+  margin: 0 0 1rem;
+}
+
+legend {
+  font-weight: 600;
+  padding: 0 0.25rem;
+}
+
+.hint {
+  font-size: 0.875rem;
+  color: #555;
+  margin-bottom: 0.75rem;
+}
+
+/* ---- Class entries ------------------------------------------------------- */
+
+.class-entry {
+  margin-bottom: 0.75rem;
+}
+
+.class-entry-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.class-entry-row input {
+  flex: 1;
+}
+
+/* ---- Buttons ------------------------------------------------------------- */
+
+button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.5rem 1rem;
+  font-size: 1rem;
+  font-family: inherit;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease;
+}
+
+button[type='submit'],
+button[type='button']:not(.secondary) {
+  background: #0057b8;
+  color: #ffffff;
+  border-color: #0057b8;
+}
+
+button[type='submit']:hover:not(:disabled),
+button[type='button']:not(.secondary):hover:not(:disabled) {
+  background: #004091;
+  border-color: #004091;
+}
+
+button[type='submit']:disabled,
+button[type='button']:disabled {
+  background: #767676;
+  border-color: #767676;
+  color: #fff;
+  cursor: not-allowed;
+}
+
+/* ---- Errors -------------------------------------------------------------- */
+
+.field-error {
+  font-size: 0.875rem;
+  color: #b00020;
+  font-weight: 500;
+}
+
+.error-banner {
+  background: #fde8ea;
+  border: 1px solid #b00020;
+  border-radius: 4px;
+  color: #b00020;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-weight: 500;
+}
+
+/* ---- Watch list ---------------------------------------------------------- */
+
+.watch-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.watch-item code {
+  flex: 1;
+  word-break: break-all;
+}
+
+.watch-item button {
+  font-size: 0.875rem;
+  padding: 0.25rem 0.625rem;
+  background: #fff;
+  color: #b00020;
+  border-color: #b00020;
+  font-weight: 500;
+}
+
+.watch-item button:hover:not(:disabled) {
+  background: #fde8ea;
+}
+
+/* ---- Reduced motion ------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+  button {
+    transition: none;
+  }
+}

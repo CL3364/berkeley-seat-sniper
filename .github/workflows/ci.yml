@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  build-and-test:
+    name: typecheck · lint · test · security
+    runs-on: ubuntu-latest
+
+    # Postgres service for integration tests that require a real DB.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: seatsniper_test
+          POSTGRES_USER: seatsniper
+          POSTGRES_PASSWORD: ci_test_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U seatsniper -d seatsniper_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Tests that skip the DB use PGlite; tests that need real Postgres use this.
+      DATABASE_URL: postgres://seatsniper:ci_test_password@localhost:5432/seatsniper_test
+      # TOKEN_SECRET must be non-empty for token signing/verification in tests.
+      TOKEN_SECRET: ci_test_token_secret_not_for_production
+      NODE_ENV: test
+      MAIL_TRANSPORT: noop
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: install dependencies
+        run: npm ci
+
+      # --- fast-gate: format + lint on all files (CI runs the full set) --------
+      - name: format check (prettier)
+        run: npx prettier --check .
+
+      - name: lint (eslint)
+        run: npx eslint . --max-warnings=0
+
+      # --- integration-gate: typecheck + vitest --------------------------------
+      - name: typecheck (tsc)
+        run: npx tsc --noEmit
+
+      - name: unit + integration tests (vitest)
+        run: npx vitest run
+
+      # --- integration-gate: playwright E2E -----------------------------------
+      - name: install playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: e2e tests (playwright)
+        run: npx playwright test
+
+      # --- security-gate (STRICT) ---------------------------------------------
+      # Install gitleaks + semgrep so the gate does not silently skip secret-scan
+      # or SAST. SECURITY_GATE_STRICT=1 turns a missing tool into a hard failure.
+      - name: install gitleaks
+        run: |
+          GITLEAKS_VERSION="8.21.2"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+
+      - name: install semgrep
+        run: pip install semgrep
+
+      - name: security gate (strict)
+        env:
+          SECURITY_GATE_STRICT: '1'
+        run: ./scripts/security-gate.sh
