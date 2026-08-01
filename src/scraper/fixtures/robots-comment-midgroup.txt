@@ -1,0 +1,9 @@
+# Synthetic fixture (review m6): a comment IN THE MIDDLE of a group, plus a
+# trailing comment on the rule line. RFC 9309: comments are ignored entirely
+# and must NOT terminate a group. The old parser treated a comment line as a
+# group terminator, so the Disallow below was dropped (under-block). It must now
+# be honored.
+# Expected effect: the class content path is DISALLOWED -> fetchClass skips it.
+User-agent: *
+# Berkeley asks crawlers to stay out of live enrollment pages
+Disallow: /content/   # class content pages

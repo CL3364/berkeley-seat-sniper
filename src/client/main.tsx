@@ -8,6 +8,11 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import './app.css';
 import { App } from '../components/App';
+import { capturePilotInviteFromUrl } from './pilot-invite';
+
+// Privacy boundary: remove a pilot bearer from the visible URL/history and put
+// it in tab-scoped storage before React renders or any application request runs.
+capturePilotInviteFromUrl();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) {

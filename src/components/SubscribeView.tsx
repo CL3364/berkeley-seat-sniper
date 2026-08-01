@@ -1,12 +1,14 @@
 /**
- * SubscribeView — FR-1, AC-2, AC-1.
+ * SubscribeView — FR-1, AC-1, AC-2.
  *
  * Collects an email + a list of class identifiers (URLs or codes). Each class
  * identifier is validated inline with normalizeClassKey before any request is
  * sent — an invalid identifier shows an inline error and blocks submission.
  *
- * On 201 the view shows the manage deep-link (containing the returned token)
- * so the user can return to their manage view later.
+ * Double opt-in (FR-9 / D3): the 202 response carries NO token — it is just an
+ * acknowledgement. On success the view tells the user to check their inbox to
+ * confirm; the confirm link arrives only by email. There is no deep-link into
+ * the manage view from here.
  *
  * Accessibility: WCAG 2.1 AA. All inputs have associated <label>s. Errors are
  * linked to their field via aria-describedby. Status messages use role="status"
@@ -18,9 +20,9 @@
 
 import React, { useState } from 'react';
 import { normalizeClassKey } from '../shared/class-key';
-import { EmailSchema } from '../shared/api';
-import { createSubscription, ApiClientError } from '../client/api';
-import type { CreateSubscriptionResponse } from '../shared/api';
+import { SubscriberEmailSchema, MAX_WATCHES_PER_SUBSCRIBER } from '../shared/api';
+import { createSubscription, ApiClientError, describeRetryAfter } from '../client/api';
+import { ResendLinkForm } from './ResendLinkForm';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,9 +47,9 @@ function newEntry(value = ''): ClassEntry {
 }
 
 function validateEmail(email: string): string | undefined {
-  const result = EmailSchema.safeParse(email);
+  const result = SubscriberEmailSchema.safeParse(email);
   if (!result.success) {
-    return result.error.errors[0]?.message ?? 'enter a valid email address';
+    return result.error.issues[0]?.message ?? 'enter a valid email address';
   }
   return undefined;
 }
@@ -72,7 +74,7 @@ export function SubscribeView(): React.ReactElement {
   const [classEntries, setClassEntries] = useState<ClassEntry[]>([newEntry()]);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | undefined>(undefined);
-  const [success, setSuccess] = useState<CreateSubscriptionResponse | null>(null);
+  const [submittedEmail, setSubmittedEmail] = useState<string | null>(null);
 
   // -- Email handlers --
 
@@ -152,10 +154,11 @@ export function SubscribeView(): React.ReactElement {
       return result.ok ? result.key : entry.value;
     });
 
+    const normalizedEmail = email.trim().toLowerCase();
     setSubmitting(true);
     try {
-      const response = await createSubscription({ email: email.trim().toLowerCase(), classKeys });
-      setSuccess(response);
+      await createSubscription({ email: normalizedEmail, classKeys });
+      setSubmittedEmail(normalizedEmail);
     } catch (err) {
       if (err instanceof ApiClientError) {
         const apiErr = err.error;
@@ -171,10 +174,20 @@ export function SubscribeView(): React.ReactElement {
           setClassEntries(updatedEntries);
         } else if (apiErr.code === 'conflict') {
           setEmailError(
-            'this email is already subscribed — use your manage link to update your watches',
+            'this email is already subscribed — use the form below to email yourself a fresh link',
           );
         } else if (apiErr.code === 'rate_limited') {
           setFormError('too many requests — please wait a moment and try again');
+        } else if (apiErr.code === 'payload_too_large') {
+          setFormError('this request is too large — shorten the class list and try again');
+        } else if (apiErr.code === 'capacity_exceeded') {
+          setFormError(
+            `Seat Sniper has reached its current public-page monitoring capacity. Try again ${describeRetryAfter(err.retryAfterSeconds)}; existing watches remain active.`,
+          );
+        } else if (apiErr.code === 'admission_unavailable') {
+          setFormError(
+            `New subscriptions are not currently available. Try again ${describeRetryAfter(err.retryAfterSeconds)}.`,
+          );
         } else {
           setFormError(apiErr.message);
         }
@@ -186,30 +199,22 @@ export function SubscribeView(): React.ReactElement {
     }
   }
 
-  // -- Success state --
+  // -- Success state (double opt-in — no token in the response, FR-9) --
 
-  if (success !== null) {
-    const manageUrl = `${window.location.pathname}?token=${encodeURIComponent(success.token)}`;
+  if (submittedEmail !== null) {
     return (
       <section aria-labelledby="success-heading">
-        <h2 id="success-heading">You are subscribed</h2>
-        <p>
-          Watching {success.watches.length} class{success.watches.length !== 1 ? 'es' : ''}:
+        <h2 id="success-heading">Check your inbox to confirm</h2>
+        <p role="status" aria-live="polite">
+          We&apos;ve emailed a confirmation link to <strong>{submittedEmail}</strong>. Click it to
+          verify control of that Berkeley mailbox and start watching — alerts only go out to
+          confirmed subscribers.
         </p>
-        <ul>
-          {success.watches.map((key) => (
-            <li key={key}>
-              <code>{key}</code>
-            </li>
-          ))}
-        </ul>
-        <p>Save your manage link — it is the only way back to your watches:</p>
-        <p>
-          <a href={manageUrl} aria-label="your manage link">
-            {window.location.origin}
-            {manageUrl}
-          </a>
+        <p className="hint">
+          Mailbox confirmation does not verify current enrollment or eligibility for a seat. The
+          link can take a minute to arrive; check your spam folder if you don&apos;t see it.
         </p>
+        <ResendLinkForm heading="Didn't get the email?" headingId="success-resend-heading" />
       </section>
     );
   }
@@ -220,8 +225,12 @@ export function SubscribeView(): React.ReactElement {
     <section aria-labelledby="subscribe-heading">
       <h2 id="subscribe-heading">Watch a class</h2>
       <p>
-        Enter your email and one or more Berkeley class URLs or codes. We will email you the moment
-        a seat or waitlist spot opens.
+        Enter your Berkeley email and one or more class URLs or codes. We will email you after
+        Berkeley&apos;s public class page shows a seat or waitlist opening.
+      </p>
+      <p className="hint">
+        Public class pages can be delayed by Berkeley&apos;s cache. We aim to notify you within two
+        minutes after a changed page becomes visible to Seat Sniper.
       </p>
 
       <form
@@ -239,7 +248,7 @@ export function SubscribeView(): React.ReactElement {
 
         {/* Email */}
         <div className="field">
-          <label htmlFor="email">Email address</label>
+          <label htmlFor="email">Berkeley email address</label>
           <input
             id="email"
             type="email"
@@ -249,9 +258,13 @@ export function SubscribeView(): React.ReactElement {
             onBlur={handleEmailBlur}
             aria-required="true"
             aria-invalid={emailTouched && emailError !== undefined}
-            aria-describedby={emailTouched && emailError ? 'email-error' : undefined}
+            aria-describedby={emailTouched && emailError ? 'email-help email-error' : 'email-help'}
             disabled={submitting}
           />
+          <span id="email-help" className="hint">
+            Use an exact @berkeley.edu address. Confirmation proves mailbox ownership, not current
+            student status.
+          </span>
           {emailTouched && emailError && (
             <span id="email-error" role="alert" className="field-error">
               {emailError}
@@ -304,19 +317,37 @@ export function SubscribeView(): React.ReactElement {
               </div>
             );
           })}
+          {/*
+           * Cap the form at the same number the contract enforces. Letting the
+           * student type a fifth class and only failing at the server turns a
+           * known rule into a rejected submission after they have done the work.
+           */}
           <button
             type="button"
             onClick={handleAddClass}
-            disabled={submitting || classEntries.length >= 50}
+            disabled={submitting || classEntries.length >= MAX_WATCHES_PER_SUBSCRIBER}
           >
             Add another class
           </button>
+          {classEntries.length >= MAX_WATCHES_PER_SUBSCRIBER && (
+            <p className="hint">
+              You can watch up to {MAX_WATCHES_PER_SUBSCRIBER} classes at a time. Once you are
+              subscribed you can remove one and add a different class.
+            </p>
+          )}
         </fieldset>
 
         <button type="submit" disabled={submitting} aria-busy={submitting}>
           {submitting ? 'Subscribing…' : 'Subscribe'}
         </button>
       </form>
+
+      <hr />
+
+      <ResendLinkForm
+        heading="Already subscribed? Lost your link?"
+        headingId="subscribe-resend-heading"
+      />
     </section>
   );
 }

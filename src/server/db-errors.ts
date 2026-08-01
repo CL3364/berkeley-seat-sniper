@@ -5,15 +5,35 @@
  * not_found → 404 mapping stays in one place.
  */
 
-import { DuplicateSubscriberError, DuplicateWatchError } from '../db';
+import {
+  DuplicateSubscriberError,
+  DuplicateWatchError,
+  PushSubscriptionLimitError,
+  SubscriberCapacityError,
+  SubscriberNotFoundError,
+  UniqueSectionCapacityError,
+  WatchLimitError,
+} from '../db';
 
 /**
  * Returns true for any conflict-class error thrown by the db repo:
  *  - DuplicateSubscriberError — duplicate email on createSubscriberWithWatches → 409
  *  - DuplicateWatchError      — duplicate (subscriber_id, class_key) on addWatch → 409
+ *  - PushSubscriptionLimitError — sixth browser registration → 409
  */
-export function isConflictError(e: unknown): e is DuplicateSubscriberError | DuplicateWatchError {
-  return e instanceof DuplicateSubscriberError || e instanceof DuplicateWatchError;
+export function isConflictError(
+  e: unknown,
+): e is DuplicateSubscriberError | DuplicateWatchError | PushSubscriptionLimitError {
+  return (
+    e instanceof DuplicateSubscriberError ||
+    e instanceof DuplicateWatchError ||
+    e instanceof PushSubscriptionLimitError
+  );
+}
+
+/** A Subscriber already holds the contract maximum of LIVE Watches. */
+export function isWatchLimitError(e: unknown): e is WatchLimitError {
+  return e instanceof WatchLimitError;
 }
 
 /**
@@ -22,8 +42,16 @@ export function isConflictError(e: unknown): e is DuplicateSubscriberError | Dup
  * a forward-compatibility guard for if the db layer adds SubscriberNotFoundError
  * later. Maps to HTTP 404.
  */
-export function isNotFoundError(e: unknown): boolean {
-  // Name-based check because SubscriberNotFoundError is not yet exported from
-  // src/db — update this to instanceof once the db barrel exports it.
-  return e instanceof Error && e.constructor.name === 'SubscriberNotFoundError';
+export function isNotFoundError(e: unknown): e is SubscriberNotFoundError {
+  return e instanceof SubscriberNotFoundError;
+}
+
+/** A new unique Section would exceed the configured polite source budget. */
+export function isCapacityError(e: unknown): e is UniqueSectionCapacityError {
+  return e instanceof UniqueSectionCapacityError;
+}
+
+/** The pilot's atomic Pending + Confirmed Subscriber cap was reached. */
+export function isSubscriberCapacityError(e: unknown): e is SubscriberCapacityError {
+  return e instanceof SubscriberCapacityError;
 }

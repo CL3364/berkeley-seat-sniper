@@ -1,9 +1,10 @@
 /**
- * Unit tests for normalizeClassKey — spec FR-1, AC-2, §4.
+ * Unit tests for normalizeClassKey — spec FR-1, AC-2, AC-17, §4.
  *
  * Contract: pure + total — never throws, never invents a term, zero-pads section
- * and component numbers to 3 digits. Invalid input → { ok: false }; never a
- * partial or guessed key.
+ * and component numbers to at least 3 digits, and preserves bounded real-world
+ * alphanumeric identifiers. Invalid input → { ok: false }; never a partial or
+ * guessed key.
  *
  * Seed cases are drawn from the trace table in src/shared/class-key.ts.
  */
@@ -138,6 +139,16 @@ describe('normalizeClassKey — Berkeley URL inputs', () => {
       '2026-fall-compsci-61a-001-lec-001',
     );
   });
+
+  it.each([
+    '2026-fall-compsci-10-999l-lab-999l',
+    '2026-fall-info-295-001-col-001',
+    '2026-fall-data-100-001-grp-001',
+    '2026-fall-physics-7a-001-slf-001',
+    '2026-fall-math-1a-001-tut-001',
+  ])('accepts real catalog identifier/component shapes: %s', (key) => {
+    expectKey(normalizeClassKey(`https://classes.berkeley.edu/content/${key}`), key);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -250,6 +261,16 @@ describe('normalizeClassKey — human code inputs', () => {
       '2026-summer-eecs-126-001-lec-001',
     );
   });
+
+  it.each([
+    ['2026 Fall COMPSCI 10 999L LAB 999L', '2026-fall-compsci-10-999l-lab-999l'],
+    ['2026 Fall INFO 295 001 COL 001', '2026-fall-info-295-001-col-001'],
+    ['2026 Fall DATA 100 001 GRP 001', '2026-fall-data-100-001-grp-001'],
+    ['2026 Fall PHYSICS 7A 001 SLF 001', '2026-fall-physics-7a-001-slf-001'],
+    ['2026 Fall MATH 1A 001 TUT 001', '2026-fall-math-1a-001-tut-001'],
+  ])('normalizes bounded real catalog shape %s', (input, expected) => {
+    expectKey(normalizeClassKey(input), expected);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -310,8 +331,18 @@ describe('normalizeClassKey — failure cases', () => {
     expect(() => normalizeClassKey(12345 as any)).not.toThrow();
   });
 
-  it('rejects an unknown component token', () => {
-    expectFail(normalizeClassKey('2026 fall compsci 189 001 online 001'), 'unrecognized-format');
+  it('accepts a bounded alphabetic component owned by the public catalog', () => {
+    expectKey(
+      normalizeClassKey('2026 fall compsci 189 001 online 001'),
+      '2026-fall-compsci-189-001-online-001',
+    );
+  });
+
+  it.each(['x', 'componentx', 'l3c'])('rejects an invalid component token %j', (component) => {
+    expectFail(
+      normalizeClassKey(`2026 fall compsci 189 001 ${component} 001`),
+      'unrecognized-format',
+    );
   });
 
   it('rejects missing component field', () => {
@@ -323,13 +354,27 @@ describe('normalizeClassKey — failure cases', () => {
     expectFail(normalizeClassKey('2026 fall compsci 189 001 lec 001 extra'), 'unrecognized-format');
   });
 
-  it('rejects a non-numeric section number', () => {
-    expectFail(normalizeClassKey('2026 fall compsci 189 abc lec 001'), 'invalid-field');
+  it('accepts a bounded alphanumeric section identifier', () => {
+    expectKey(
+      normalizeClassKey('2026 fall compsci 189 abc lec 001'),
+      '2026-fall-compsci-189-abc-lec-001',
+    );
   });
 
-  it('rejects a section number > 3 digits', () => {
-    // 4-digit section fails the \d{1,3} check.
-    expectFail(normalizeClassKey('2026 fall compsci 189 0001 lec 001'), 'invalid-field');
+  it('accepts numeric section and component identifiers up to 8 digits', () => {
+    expectKey(
+      normalizeClassKey('2026 fall compsci 189 0001 lec 12345678'),
+      '2026-fall-compsci-189-0001-lec-12345678',
+    );
+  });
+
+  it.each([
+    '2026 fall compsci 189 123456789 lec 001',
+    '2026 fall compsci 189 abcdefghi lec 001',
+    '2026 fall compsci 189 001 lec 123456789',
+    '2026 fall compsci 189 001 lec abcdefghi',
+  ])('rejects a section/component identifier beyond 8 characters: %s', (input) => {
+    expectFail(normalizeClassKey(input), 'invalid-field');
   });
 
   it('rejects a non-content URL with a malformed content segment', () => {
@@ -432,9 +477,44 @@ describe('ClassKeySchema — already-canonical inputs', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects a key with an unknown component', () => {
+  it('accepts a bounded catalog-owned component code outside the suggestion list', () => {
     const result = ClassKeySchema.safeParse('2026-fall-compsci-189-001-online-001');
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    '2026-fall-compsci-189-001-x-001',
+    '2026-fall-compsci-189-001-componentx-001',
+    '2026-fall-compsci-189-001-l3c-001',
+  ])('rejects an invalid component code in canonical form: %s', (key) => {
+    expect(ClassKeySchema.safeParse(key).success).toBe(false);
+  });
+
+  it.each([
+    '2026-fall-compsci-10-999l-lab-999l',
+    '2026-fall-info-295-001-col-001',
+    '2026-fall-data-100-001-grp-001',
+    '2026-fall-physics-7a-001-slf-001',
+    '2026-fall-math-1a-001-tut-001',
+  ])('accepts a canonical real-world catalog shape: %s', (key) => {
+    expect(ClassKeySchema.safeParse(key).success).toBe(true);
+  });
+
+  it.each([
+    '2026-fall-compsci-10-123456789-lab-001',
+    '2026-fall-compsci-10-001-lab-123456789',
+    '2026-fall-compsci-10-1-lab-001',
+    '2026-fall-compsci-10-001-lab-1',
+  ])('rejects a noncanonical or overlong catalog identifier: %s', (key) => {
+    expect(ClassKeySchema.safeParse(key).success).toBe(false);
+  });
+
+  it('rejects oversized subject and course components before indexed persistence', () => {
+    const oversized = 'x'.repeat(33);
+    expect(ClassKeySchema.safeParse(`2026-fall-${oversized}-189-001-lec-001`).success).toBe(false);
+    expect(ClassKeySchema.safeParse(`2026-fall-compsci-${oversized}-001-lec-001`).success).toBe(
+      false,
+    );
   });
 });
 
@@ -484,5 +564,11 @@ describe('ClassKeyInputSchema — normalizes URL and code to canonical key', () 
   it('fails validation for unknown season "winter"', () => {
     const result = ClassKeyInputSchema.safeParse('2026 winter compsci 189 001 lec 001');
     expect(result.success).toBe(false);
+  });
+
+  it('bounds raw input before trimming and direct normalization', () => {
+    const oversized = ' '.repeat(513);
+    expect(ClassKeyInputSchema.safeParse(oversized).success).toBe(false);
+    expect(normalizeClassKey(oversized)).toEqual({ ok: false, reason: 'invalid-field' });
   });
 });

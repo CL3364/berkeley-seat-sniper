@@ -5,6 +5,12 @@
 # Exit nonzero on any failure so the lead/CI can block the merge.
 
 set -e
+echo "== integration-gate: whole-repository format =="
+npm run format:check
+
+echo "== integration-gate: whole-repository lint =="
+npm run lint -- --max-warnings=0
+
 echo "== integration-gate: whole-program typecheck =="
 npx tsc --noEmit
 

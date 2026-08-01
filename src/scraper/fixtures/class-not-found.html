@@ -1,0 +1,34 @@
+<!doctype html>
+<!--
+  Sanitized soft-404 fixture: a recognizable "class not found" body served with
+  HTTP 200. It intentionally has no current-enrollment section.
+
+  Expected result from fetchClass(): { kind: 'class-gone', ... }
+    - NOT parser-broke: the parser is fine; the class is gone (FR-13 / D8).
+    - The worker RETIRES every watch on this class; it does NOT page the operator
+      and does NOT alert subscribers, and class_state is left untouched.
+
+  Detection markers (see parse.ts isNotFoundPage):
+    - a `.not-found` element (structural marker), AND/OR
+    - a <title> / <h1> matching a "page/class not found" phrase, AND
+    - the absence of the live `section.current-enrollment` region.
+  See fixtures/README.md for context.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Page not found | UC Berkeley</title>
+  </head>
+  <body>
+    <div class="view-content">
+      <div class="not-found" data-status="not-found">
+        <h1>Class not found</h1>
+        <p>
+          The class section you are looking for is not currently offered, or the enrollment URL is
+          no longer valid. It may have been cancelled, or the term may have ended.
+        </p>
+        <p>Browse the current schedule of classes to find an active section.</p>
+      </div>
+    </div>
+  </body>
+</html>

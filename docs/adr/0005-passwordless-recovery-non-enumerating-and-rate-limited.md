@@ -1,7 +1,7 @@
 # 5. Passwordless link recovery is non-enumerating and rate-limited
 
 Date: 2026-06-05
-Status: Accepted (implementation pending — see docs/plans/0005)
+Status: Accepted and implemented
 
 ## Context
 

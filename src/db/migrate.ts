@@ -5,8 +5,20 @@
  *
  * Secrets come only from the environment (constitution — never hard-coded).
  */
-import { getDb, runMigrations } from './client';
+import { closeDb, getDb, runMigrations } from './client';
 
-const db = getDb();
-await runMigrations(db);
-console.log('migrations applied');
+try {
+  process.loadEnvFile();
+} catch {
+  // No local .env — use the deployment environment as-is.
+}
+
+try {
+  const db = getDb();
+  await runMigrations(db);
+  console.log('migrations applied');
+} finally {
+  // A one-shot migration must not leave the module-level Pool holding the
+  // process open. `finally` also closes it when a migration fails.
+  await closeDb();
+}

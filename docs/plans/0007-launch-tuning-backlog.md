@@ -13,10 +13,12 @@ an ADR or a full plan. Keep items here until built, then delete.
    real shot; the cap only bounds noise. Small worker-lane change + a tiny per-pair
    counter (in-memory single instance; shared store for HA). Tunable via env.
 
-2. **Reconcile the poll cadence default to ~30s.** (Grill Q2.) `env.example` says
-   `POLL_INTERVAL_SECONDS=120`, the worker default is 60 — they disagree. Set the canonical
-   default to 30 (the fan-out makes per-Section load trivial at student-group scale) and
-   make `env.example` + the worker agree.
+2. **Fixed ~30s per-Section cadence — superseded 2026-07-27.** The v0.4.5 source
+   decision uses cache-aware deadline scheduling, not a fixed per-Section promise.
+   `SOURCE_REQUESTS_PER_SECOND=1` is one physical Berkeley-origin request/second globally
+   across robots, class, conditional, and redirect attempts; the 120-second
+   source-visible target yields a maximum of 96 Confirmed-demand Sections. No cadence
+   tweak may create a per-user/per-Section request allowance or bypass cache deadlines.
 
 3. **Label the Opening kind in Alert copy.** (Grill Q4.) The notifier email must clearly
    say "Seat opened" vs "Waitlist spot opened" so a Waitlist Opening is never mistaken for
@@ -29,5 +31,6 @@ an ADR or a full plan. Keep items here until built, then delete.
 
 ## Notes
 
-These are deliberately not ADRs (each is reversible config/copy). Promote an item to its
-own plan/ADR only if it grows into a real trade-off.
+The remaining items are deliberately not ADRs (each is reversible config/copy). The
+superseded cadence item is governed by spec v0.4.5 and ADR 0002. Promote another item to
+its own plan/ADR only if it grows into a real trade-off.

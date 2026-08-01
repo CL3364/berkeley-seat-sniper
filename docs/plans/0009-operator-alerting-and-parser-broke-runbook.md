@@ -1,6 +1,10 @@
 # Plan 0009 — Operator alerting + parser-broke runbook
 
-Status: Planned (not started) — pilot-launch requirement
+Status: Repository implementation complete; production inbox and incident drill remain open.
+Owner decision 2026-06-09: destination is a MONITORED EMAIL INBOX
+(`OPERATOR_EMAIL`, set at deploy time; chat webhook not built for launch); the
+class-gone/shape-changed split IS in scope this pass (not a fast-follow); debounce +
+fail-loud `OPERATOR_EMAIL` requirement in scope as planned.
 Decision: grill launch-Q2 + [ADR 0009](../adr/0009-launch-posture-closed-pilot-then-public.md)
 
 ## Goal
@@ -9,7 +13,7 @@ Guarantee that a scraper break reaches a MONITORED human quickly, without fatigu
 and give that human a runbook. The constitution says the parser WILL break; if a break goes
 unnoticed, the pilot silently stops delivering Alerts while users miss seats.
 
-## Current state (gaps found during launch testing)
+## Historical gaps (resolved by the v0.4 repository implementation)
 
 - `notifier.alertOperator(classKey, detail)` sends to `OPERATOR_EMAIL ?? MAIL_FROM` — if
   `OPERATOR_EMAIL` is unset it silently falls back to the no-reply `from`, so breaks can go
@@ -53,10 +57,10 @@ On a parser-broke operator alert:
 1. Open `https://classes.berkeley.edu/content/<classKey>` in a browser.
 2. **404 / "class not found"** → the Section was cancelled or the term ended. Retire the
    Watch (or let the term-expiry sweep handle it). Not a code bug.
-3. **200 but the seat-count node moved/renamed** → fix the selectors in
-   `src/scraper/parse.ts` (`.enroll-numbers .available .count`, `.waitlist-status`) against
-   the new HTML, add a fixture, ship. Or accelerate the SIS API migration (Plan 0001) to
-   remove HTML fragility entirely.
+3. **200 but the labeled enrollment fields moved/renamed** → keep the source halted if
+   continued polling is unsafe, update `src/scraper/parse.ts` against sanitized
+   live-shaped fixtures, run the gates, and ship. The SIS API is not a student-accessible
+   fallback (ADR 0002).
 4. If the upstream is rate-limiting/blocking us → set `KILL_SWITCH=1` to halt fetching,
    then back off / contact the registrar.
 
@@ -66,9 +70,9 @@ On a parser-broke operator alert:
 - A 404/class-gone retires the Watch and does NOT page the operator.
 - A shape-changed (200) fixture pages the operator exactly once.
 
-## Pilot minimum (subset to ship before the closed pilot)
+## Pilot minimum
 
 - `OPERATOR_EMAIL` set to a monitored inbox/channel + fail-loud if unset.
 - Operator-alert debounce (no per-cycle spam).
-  (The class-gone/shape-changed split + retirement is a fast follow; in a small pilot the
-  operator can manually triage a gone-section alert.)
+- Class-gone/shape-changed split + retirement.
+- Exercise the parser-broke, kill-switch, recovery, and monitored-inbox path before pilot.

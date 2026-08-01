@@ -1,7 +1,7 @@
 # 1. Double opt-in before alerting
 
 Date: 2026-06-05
-Status: Accepted (supersedes the shipped v1 behavior; implementation pending)
+Status: Accepted and implemented; required before any pilot/public launch
 
 ## Context
 

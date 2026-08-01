@@ -1,6 +1,7 @@
 # Plan 0003 — Double opt-in (email confirmation before alerting)
 
-Status: Planned (not started) — diverges from shipped v1
+Status: Implemented
+(see ADR 0009 amendment); ships before any launch, pilot included
 Decision: [ADR 0001](../adr/0001-double-opt-in-before-alerting.md)
 
 ## Goal

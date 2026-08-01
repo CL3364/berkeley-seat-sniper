@@ -12,13 +12,36 @@
 
 import type { Db } from '../db';
 import {
+  claimAlertDelivery,
+  claimOpeningDeliveries,
+  cancelAlertDelivery,
+  cancelClaimedMailJob,
+  claimDeadLetterIncidentsForSurface,
+  claimMailBatch,
+  claimMailJobs,
+  commitOpeningAndEnqueueMail,
+  completeMailJob,
+  deadLetterMailJob,
+  deferAlertDelivery,
+  deferMailJob,
+  enqueueOperatorMail,
+  expireMailOutboxAlerts,
   getClassState,
   getDistinctWatchedClassKeys,
+  getMailOutboxHealth,
+  getPollCycleCutoff,
+  getEligibleAlertDelivery,
   getSubscribersWatching,
+  listPendingAlertDeliveries,
+  markAlertDeliverySent,
+  markDeadLetterIncidentSurfaced,
+  recordParserBroken,
+  recordParserRecovery,
+  retireWatchesForClass,
+  sweepRetention,
   upsertClassState,
 } from '../db';
-import type { SeatStatus } from '../shared/seat-state';
-import type { WorkerRepo } from './types';
+import type { RuntimeWorkerRepo } from './types';
 import type { ClassKey } from '../shared/class-key';
 
 /**
@@ -27,27 +50,118 @@ import type { ClassKey } from '../shared/class-key';
  *
  * PII note: this file never logs anything — callers own log discipline.
  */
-export function createWorkerRepo(db: Db): WorkerRepo {
+export function createWorkerRepo(db: Db): RuntimeWorkerRepo {
   return {
     getDistinctWatchedClassKeys(): Promise<ClassKey[]> {
       return getDistinctWatchedClassKeys(db);
+    },
+
+    getPollCycleCutoff(): Promise<string> {
+      return getPollCycleCutoff(db);
     },
 
     getSubscribersWatching(classKey: ClassKey): Promise<Array<{ id: string; email: string }>> {
       return getSubscribersWatching(db, classKey);
     },
 
+    claimAlertDelivery(delivery) {
+      return claimAlertDelivery(db, delivery);
+    },
+
+    claimOpeningDeliveries(opening) {
+      return claimOpeningDeliveries(db, opening);
+    },
+
+    listPendingAlertDeliveries() {
+      return listPendingAlertDeliveries(db);
+    },
+
+    getEligibleAlertDelivery(key) {
+      return getEligibleAlertDelivery(db, key);
+    },
+
+    cancelAlertDelivery(key) {
+      return cancelAlertDelivery(db, key);
+    },
+
+    deferAlertDelivery(key) {
+      return deferAlertDelivery(db, key);
+    },
+
+    markAlertDeliverySent(key) {
+      return markAlertDeliverySent(db, key);
+    },
+
+    retireWatchesForClass(classKey: ClassKey, activatedThrough: string): Promise<number> {
+      return retireWatchesForClass(db, classKey, activatedThrough);
+    },
+
     getClassState(classKey: ClassKey) {
       return getClassState(db, classKey);
     },
 
-    upsertClassState(state: {
-      classKey: ClassKey;
-      lastStatus: SeatStatus;
-      lastOpenSeats: number;
-      lastWaitlistOpen: boolean;
-    }): Promise<void> {
+    upsertClassState(state: Parameters<RuntimeWorkerRepo['upsertClassState']>[0]): Promise<void> {
       return upsertClassState(db, state);
+    },
+
+    commitOpeningAndEnqueueMail(opening) {
+      return commitOpeningAndEnqueueMail(db, opening);
+    },
+
+    enqueueOperatorMail(input) {
+      return enqueueOperatorMail(db, input);
+    },
+
+    recordParserBroken(input) {
+      return recordParserBroken(db, input);
+    },
+
+    recordParserRecovery(classKey) {
+      return recordParserRecovery(db, classKey);
+    },
+
+    claimMailBatch(options) {
+      return claimMailBatch(db, options);
+    },
+
+    claimMailJobs(options) {
+      return claimMailJobs(db, options);
+    },
+
+    completeMailJob(input) {
+      return completeMailJob(db, input);
+    },
+
+    cancelClaimedMailJob(input) {
+      return cancelClaimedMailJob(db, input);
+    },
+
+    deferMailJob(input) {
+      return deferMailJob(db, input);
+    },
+
+    deadLetterMailJob(input) {
+      return deadLetterMailJob(db, input);
+    },
+
+    claimDeadLetterIncidentsForSurface(options) {
+      return claimDeadLetterIncidentsForSurface(db, options);
+    },
+
+    markDeadLetterIncidentSurfaced(input) {
+      return markDeadLetterIncidentSurfaced(db, input);
+    },
+
+    expireMailOutboxAlerts() {
+      return expireMailOutboxAlerts(db);
+    },
+
+    getMailOutboxHealth() {
+      return getMailOutboxHealth(db);
+    },
+
+    sweepRetention(now) {
+      return sweepRetention(db, now);
     },
   };
 }

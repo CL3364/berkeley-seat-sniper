@@ -1,25 +1,22 @@
 <!doctype html>
 <!--
-  Synthetic fixture: page whose enrollment structure has changed (e.g. after a
-  site redesign). The expected enrollment nodes are absent.
-  Expected parse result: { kind: 'parser-broke', ... }
-  This MUST NOT produce a SeatState — it must loudly signal a parsing failure.
-  See fixtures/README.md for context.
+  Shape-change fixture: identity is correct but the current-enrollment region
+  and its labeled values are absent. This must be parser-broke, never closed.
 -->
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
-    <title>COMPSCI 189 | UC Berkeley</title>
+    <meta charset="utf-8" />
+    <link
+      rel="canonical"
+      href="https://classes.berkeley.edu/content/2026-fall-compsci-189-001-lec-001"
+    />
+    <title>2026 Fall COMPSCI 189 001 LEC 001 | UCB Class Search</title>
   </head>
   <body>
-    <!-- Enrollment section has been redesigned — the selectors the parser relies on
-       (.enroll-numbers .available .count) are no longer present. -->
-    <div class="course-info">
-      <h1>Computer Science 189</h1>
-      <p>Enrollment information is unavailable in this page format.</p>
-      <div class="enrollment-widget" data-class-id="cs189">
-        <!-- New React-driven widget loads dynamically; no static HTML -->
-      </div>
-    </div>
+    <h1>COMPSCI 189 001 - LEC 001</h1>
+    <section class="redesigned-enrollment-widget">
+      <h3>Enrollment</h3>
+      <p>Enrollment information is loaded by an unknown client-side widget.</p>
+    </section>
   </body>
 </html>

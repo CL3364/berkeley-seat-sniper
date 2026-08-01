@@ -1,6 +1,6 @@
 # Plan 0008 — Email deliverability setup (provider, domain auth, hygiene)
 
-Status: Planned (not started) — launch prerequisite for the email channel
+Status: Repository implementation complete; external production provisioning remains open
 Decision: [ADR 0007](../adr/0007-transactional-provider-authed-subdomain.md)
 
 ## Goal
@@ -15,6 +15,10 @@ subdomain, and unsubscribe/bounce hygiene. Replaces the `smtp.ts` stub.
   complaints, and cost at expected volume. (Postmark = great transactional deliverability;
   SES = cheapest at scale; Resend = simplest developer experience.) Record the choice here
   when made.
+- **DECIDED 2026-06-09: Resend.** The adapter already exists as the code's only live path;
+  simplest API at student-group volume, with bounce/complaint webhooks available. Account
+  provisioning + SPF/DKIM/DMARC on the sending subdomain remain the owner's task; all
+  in-repo verification runs against the noop transport and a fake client.
 - Key from env only (`MAIL_PROVIDER`, `<PROVIDER>_API_KEY`); never hardcode/log.
 
 ## DNS / domain auth (the deliverability core)
@@ -28,7 +32,7 @@ subdomain, and unsubscribe/bounce hygiene. Replaces the `smtp.ts` stub.
 
 ## Adapter (notifier lane — `src/notify/**`)
 
-- Replace `transports/smtp.ts` stub with a provider adapter implementing the existing
+- Maintain the shipped Resend provider adapter implementing the existing
   `Transport` interface (`send(message)`); the Notifier layer + outbox + idempotency are
   unchanged. The noop transport stays the default for dev/test.
 - Add `List-Unsubscribe` + `List-Unsubscribe-Post: List-Unsubscribe=One-Click` headers

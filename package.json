@@ -1,11 +1,11 @@
 {
   "name": "berkeley-seat-sniper",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Notify-only monitor that alerts Berkeley students when a watched class opens a seat.",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12"
   },
   "scripts": {
     "dev:web": "vite",
@@ -21,20 +21,24 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts"
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:incident": "tsx src/db/dead-letter-incident-cli.ts"
   },
   "dependencies": {
-    "@hono/node-server": "^1.13.7",
+    "@electric-sql/pglite": "^0.2.14",
+    "@hono/node-server": "^2.0.11",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.6.13",
     "node-html-parser": "^7.1.0",
     "pg": "^8.13.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "redis": "^6.1.0",
+    "tsx": "^4.19.2",
+    "web-push": "^3.6.7",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.2.14",
     "@eslint/js": "^9.16.0",
     "@playwright/test": "^1.49.0",
     "@testing-library/jest-dom": "^6.6.3",
@@ -44,6 +48,7 @@
     "@types/pg": "^8.11.10",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/web-push": "^3.6.4",
     "@vitejs/plugin-react": "^4.3.4",
     "drizzle-kit": "^0.31.10",
     "eslint": "^9.16.0",
@@ -51,7 +56,6 @@
     "eslint-plugin-react-refresh": "^0.4.16",
     "jsdom": "^25.0.1",
     "prettier": "^3.4.2",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.17.0",
     "vite": "^6.0.3",

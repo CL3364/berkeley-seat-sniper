@@ -4,16 +4,48 @@ dist
 
 # VCS and editor metadata.
 .git
+.github
 .gitignore
+.gitattributes
 .prettierignore
 .prettierrc.json
+.claude
+.duet
+.mcp.json
+.playwright-mcp
+.codex
+.Codex
+.agents
 
 # Secrets and env files — NEVER baked into the image.
 .env
 .env.*
+.npmrc
 *.key
 *.pem
+*.p12
+*.pfx
 *vapid*
+secrets
+secrets/**
+.secrets
+.secrets/**
+
+# Subscriber stores, local databases, outboxes, and backup artifacts are
+# sensitive even when their filenames are not.
+data
+data/**
+backups
+backups/**
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.db
+*.db-*
+*.dump
+*.backup
+*.ndjson
+.restic
 
 # Test/QA directories not needed in production images.
 tests
@@ -30,6 +62,7 @@ constitution.md
 # Playwright artifacts.
 playwright-report
 test-results
+*.png
 
 # Editor and OS metadata.
 .DS_Store

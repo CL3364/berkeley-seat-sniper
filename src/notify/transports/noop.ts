@@ -12,7 +12,13 @@ import type { Transport, TransportMessage } from '../types';
  */
 export function createNoopTransport(): Transport {
   return {
-    async send(message: TransportMessage): Promise<void> {
+    // Brand (Transport.kind, see ../types): ONLY the no-op transport carries
+    // `kind: 'noop'`. The env-gated NOOP_OUTBOX_FILE sink in index.ts keys off
+    // THIS field — not "a transport was injected" — so an explicitly injected
+    // REAL transport (brand unset) can never tee subscriber emails + tokens to
+    // disk (spec v0.3.1: the sink is honored only when the transport IS noop).
+    kind: 'noop',
+    async send(message: TransportMessage) {
       // Structured log — no address, no watch list (AC-8).
       console.log(
         JSON.stringify({
@@ -24,6 +30,7 @@ export function createNoopTransport(): Transport {
         }),
       );
       // No network call; no outbox push — the Notifier layer owns those.
+      return { status: 'success' as const, acceptedAt: new Date() };
     },
   };
 }

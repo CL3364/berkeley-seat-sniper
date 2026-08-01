@@ -1,84 +1,151 @@
 /**
- * Server entry point. Runs DB migrations, mounts the Hono app via
- * @hono/node-server on PORT, and serves the built SPA from dist/web/.
+ * Production server entrypoint.
  *
- * Boot order:
- *   1. getDb()          — construct the DB driver (PGlite or real Postgres)
- *   2. runMigrations()  — apply pending drizzle migrations (CRITICAL: tables
- *                         must exist before any request is served)
- *   3. createApp(repo)  — build the Hono API handler (pure, no side-effects)
- *   4. static serving   — serve dist/web/ assets + SPA fallback for non-/api/
- *                         GET requests (client-side routing)
- *   5. serve()          — bind the port
- *
- * For tests: import createApp from './app' and pass a mock SubscriptionRepo
- * directly — do NOT import this file, which would bind a live DB and port.
- *
- * For the SPA: API routes take priority (registered first). Any unmatched
- * /api/* path returns a JSON 404 envelope — never index.html. Non-/api/ GETs
- * that do not match a static asset fall back to dist/web/index.html so deep
- * links like /?token=... work correctly with client-side routing.
+ * Production migrations are a separate one-shot release step (`db:migrate`);
+ * the API never races another process to mutate schema at startup. Local
+ * process-owned PGlite may be initialized only through the explicit
+ * `AUTO_MIGRATE_DEV=1` switch.
  */
 
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Hono } from 'hono';
-import { getDb, makeRepo, runMigrations } from '../db';
-import { createApp } from './app';
 import { apiError } from '../shared/errors';
 
-const PORT = parseInt(process.env.PORT ?? '8787', 10);
+// Tests/E2E set SKIP_ENV_FILE=1 so a developer's local configuration cannot
+// redirect an isolated run to production-like dependencies.
+if (process.env.SKIP_ENV_FILE !== '1') {
+  try {
+    process.loadEnvFile();
+  } catch {
+    // Deployed environments inject variables; a missing local .env is normal.
+  }
+}
+
+function readPort(): number {
+  const raw = process.env.PORT?.trim() || '8787';
+  if (!/^\d+$/.test(raw)) throw new Error('PORT must be an integer from 1 to 65535');
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 65_535) {
+    throw new Error('PORT must be an integer from 1 to 65535');
+  }
+  return value;
+}
+
+function hasUnsafeEncodedPath(request: Request): boolean {
+  const path = new URL(request.url).pathname;
+  return /\\|%00|%2f|%5c/i.test(path);
+}
 
 async function bootstrap(): Promise<void> {
-  // Step 1+2: acquire a single DB instance and run migrations before serving.
-  // Fail loudly — if migrations throw, the process exits with a non-zero code
-  // rather than silently serving an empty DB and 500ing on every request.
+  const [
+    dbModule,
+    notifyModule,
+    appModule,
+    admissionModule,
+    repoModule,
+    readinessModule,
+    rateLimitModule,
+  ] = await Promise.all([
+    import('../db'),
+    import('../notify'),
+    import('./app'),
+    import('./admission'),
+    import('./repo'),
+    import('./worker-readiness'),
+    import('./rate-limit'),
+  ]);
+  const { closeDb, getDb, runMigrations } = dbModule;
+  const { createNotifier } = notifyModule;
+  const { createApp } = appModule;
+  const { readAdmissionPolicy, subscriberLimitForAdmission } = admissionModule;
+  const { makeServerRepo, readSourceCapacityConfig } = repoModule;
+  const { workerPushIsOperational } = readinessModule;
+  const { connectRedisRateLimiter, defaultRateLimiter } = rateLimitModule;
+  const admissionPolicy = readAdmissionPolicy();
+
+  // Construction performs fail-loud mail/provider/base-URL validation. The
+  // resulting notifier is deliberately discarded: v0.4 API routes enqueue
+  // durable work, and the worker is the only dispatcher.
+  void createNotifier({ push: null });
+
   const db = getDb();
-  await runMigrations(db);
-  console.log({ event: 'migrations_applied' });
+  const autoMigrateDev = process.env.AUTO_MIGRATE_DEV === '1';
+  if (autoMigrateDev && process.env.NODE_ENV === 'production') {
+    throw new Error('AUTO_MIGRATE_DEV=1 is forbidden in production; run db:migrate once');
+  }
+  if (autoMigrateDev) {
+    await runMigrations(db);
+    console.log({ event: 'development_migrations_applied' });
+  }
 
-  // Step 3: the API Hono app, pure — no port binding, no FS access.
-  // makeRepo closes over db and bridges the (db, ...) signatures to
-  // the SubscriptionRepo interface createApp() expects.
-  const api = createApp(makeRepo(db));
+  const redisUrl = process.env.REDIS_URL?.trim();
+  const redisHandle = redisUrl ? await connectRedisRateLimiter(redisUrl) : undefined;
+  // Throws in production when no connected Redis dependency was supplied.
+  const rateLimiter = redisHandle?.limiter ?? defaultRateLimiter();
 
-  // Step 4: root app that mounts API first, then static assets + SPA fallback.
-  // Keeping this in index.ts (not createApp) means unit tests never require
-  // a real dist/web/ directory on disk.
-  const app = new Hono();
-
-  // 4a. API routes — matched /api/* paths handled here, no fall-through.
-  app.route('/', api);
-
-  // 4b. API catch-all: any unmatched /api/* path returns a JSON 404 envelope,
-  //     not index.html. Placed AFTER app.route so known routes win.
-  app.all('/api/*', (c) => c.json(apiError('not_found', 'route not found'), 404));
-
-  // 4c. Static assets from dist/web/ (JS, CSS, images, etc.).
-  //     serveStatic calls next() when no file is found, falling through to 4d.
-  app.use(
-    '/*',
-    serveStatic({
-      root: './dist/web',
+  const sourceCapacity = readSourceCapacityConfig();
+  const api = createApp(
+    makeServerRepo(db, {
+      maxUniqueSections: sourceCapacity.maxUniqueSections,
+      maxSubscribers: subscriberLimitForAdmission(admissionPolicy),
     }),
+    undefined,
+    {
+      admissionPolicy,
+      rateLimiter,
+      capacityRetryAfterSeconds: sourceCapacity.visibleTargetSeconds,
+      isPushOperational: workerPushIsOperational,
+    },
   );
 
-  // 4d. SPA fallback: for any non-/api/ GET that didn't match a real file,
-  //     serve index.html so client-side routing works (e.g. /?token=...).
+  const app = new Hono();
+  app.route('/', api);
+  app.all('/api/*', (c) => c.json(apiError('not_found', 'route not found'), 404));
+
+  // Defense in depth around static lookup. @hono/node-server 2.0.11 already
+  // rejects encoded traversal; rejecting separators/NUL before file resolution
+  // keeps that invariant explicit if adapters change later.
+  app.use('/*', async (c, next) => {
+    if (hasUnsafeEncodedPath(c.req.raw)) {
+      return c.text('Bad Request', 400);
+    }
+    await next();
+  });
+  app.use('/*', serveStatic({ root: './dist/web' }));
   app.get('/*', serveStatic({ path: './dist/web/index.html' }));
 
-  // Step 5: bind the port.
-  serve({ fetch: app.fetch, port: PORT }, (info) => {
-    console.log({ event: 'server_started', port: info.port });
+  const server = serve({ fetch: app.fetch, port: readPort() }, (info) => {
+    console.log({
+      event: 'server_started',
+      port: info.port,
+      uniqueSectionCapacity: sourceCapacity.maxUniqueSections,
+    });
+  });
+
+  let shuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log({ event: 'server_shutdown_started', signal });
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await redisHandle?.close();
+    await closeDb();
+    console.log({ event: 'server_shutdown_complete' });
+  };
+
+  process.once('SIGTERM', () => {
+    void shutdown('SIGTERM').then(() => process.exit(0));
+  });
+  process.once('SIGINT', () => {
+    void shutdown('SIGINT').then(() => process.exit(0));
   });
 }
 
-// Top-level await is not available in CommonJS; use .catch to fail loudly.
-bootstrap().catch((err: unknown) => {
+bootstrap().catch((error: unknown) => {
   console.error({
     event: 'bootstrap_failed',
-    errorName: err instanceof Error ? err.constructor.name : 'unknown',
-    message: err instanceof Error ? err.message : String(err),
+    errorName: error instanceof Error ? error.constructor.name : 'unknown',
   });
   process.exit(1);
 });

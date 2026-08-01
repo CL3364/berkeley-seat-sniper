@@ -1,6 +1,7 @@
 # Plan 0005 — Passwordless link resend + rate limiting
 
-Status: Planned (not started)
+Status: Implemented
+(see ADR 0009 amendment)
 Decision: [ADR 0005](../adr/0005-passwordless-recovery-non-enumerating-and-rate-limited.md)
 
 ## Goal

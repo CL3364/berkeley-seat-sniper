@@ -1,11 +1,14 @@
 /**
- * ManageView — FR-2, AC-1, AC-7.
+ * ManageView — FR-2, FR-9, FR-15, AC-1, AC-7, AC-16.
  *
- * Keyed by the `?token=` query param. Loads the subscription, lists current
- * watches, lets the user add/remove watches, and unsubscribe entirely.
+ * Keyed by the `?token=` query param. Loads the subscription, shows Pending vs
+ * Confirmed state, lists current watches, lets the user add/remove watches,
+ * enable/disable per-browser push, and unsubscribe entirely.
  *
  * States: loading, error (token invalid / not found / network), empty (no
- * watches), and the populated list with add/remove/unsubscribe controls.
+ * watches), and the populated list with add/remove/push/unsubscribe controls.
+ * When the subscriber is Pending (`confirmed: false`) a banner prompts them to
+ * confirm — with a resend form — and push is gated off until they do.
  *
  * Accessibility: WCAG 2.1 AA. Every action has a visible label, keyboard
  * operability, and focus management after destructive actions.
@@ -15,10 +18,20 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { getSubscription, addWatch, removeWatch, unsubscribe, ApiClientError } from '../client/api';
-import type { GetSubscriptionResponse } from '../shared/api';
+import {
+  getSubscription,
+  addWatch,
+  removeWatch,
+  unsubscribe,
+  ApiClientError,
+  describeRetryAfter,
+} from '../client/api';
+import type { GetSubscriptionResponse, WatchFreshness } from '../shared/api';
+import { MAX_WATCHES_PER_SUBSCRIBER } from '../shared/api';
 import type { ClassKey } from '../shared/class-key';
-import { normalizeClassKey } from '../shared/class-key';
+import { classPageUrl, normalizeClassKey } from '../shared/class-key';
+import { PushToggle } from './PushToggle';
+import { ResendLinkForm } from './ResendLinkForm';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,6 +48,181 @@ type LoadState =
 
 interface ManageViewProps {
   token: string;
+}
+
+function formatCheckedAt(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 'an unknown time';
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(parsed);
+}
+
+/** Em dash for an observation we do not have yet (FR-25: never render a guess as a number). */
+const UNKNOWN = '—';
+
+/**
+ * Render "3 of 350" for a count out of a total, or a dash when either side is
+ * unknown. Deliberately refuses to render a bare numerator: "3" with no
+ * denominator reads as a quantity when it is really a fraction, and a student
+ * deciding what to drop needs the ratio.
+ */
+function formatOutOf(count: number | null, total: number | null): string {
+  if (count === null || total === null) return UNKNOWN;
+  return `${count} of ${total}`;
+}
+
+/**
+ * Open waitlist SLOTS, which is `waitlistMax - waitlisted`.
+ *
+ * `waitlisted` is how many students are already QUEUED, not how many places are
+ * free — rendering it directly would report a full waitlist (100 of 100) as
+ * wide open. Clamped at zero because an over-full waitlist is a real observed
+ * state on Berkeley's pages and a negative count is meaningless to a student.
+ *
+ * `waitlistOpen` GATES the result. The rule is an IMPLICATION, not a
+ * biconditional — a rendered positive count implies `waitlistOpen === true`, but
+ * `true` does NOT imply we can render a number:
+ *
+ *  - false  -> 0, whatever the arithmetic says. This is the field the ALERTING
+ *              path derives from (`src/scraper/parse.ts`), so if the box claimed
+ *              open spots while it is false, a student would read availability
+ *              and then never receive the waitlist alert that number implies.
+ *              Understating costs them one refresh; overstating costs trust.
+ *  - null   -> dash. We do not know whether the waitlist is moving, so we cannot
+ *              honestly show a count even when the arithmetic would produce one.
+ *              Reachable for rows migrated before the observation columns existed.
+ *  - true   -> use the counts, and dash if either is null. We gate on it but
+ *              never fabricate from it: a count is a measurement, and inventing
+ *              "at least 1" would put a number on the page that nothing observed.
+ *
+ * The values are stored as INDEPENDENT columns on `class_state` — `waitlistOpen`
+ * NOT NULL, the counts nullable — so divergent snapshots are reachable even
+ * though one parse pass cannot emit one. Trusting the arithmetic alone is what
+ * makes that divergence user-visible.
+ */
+function openWaitlistSlots(freshness: WatchFreshness): number | null {
+  const { waitlisted, waitlistMax, waitlistOpen } = freshness;
+  if (waitlistOpen === false) return 0;
+  if (waitlistOpen === null) return null;
+  if (waitlisted === null || waitlistMax === null) return null;
+  return Math.max(0, waitlistMax - waitlisted);
+}
+
+/**
+ * One class the student is watching, as a clickable box (FR-25).
+ *
+ * Shows the class name, its enrollment code, open seats out of total, open
+ * waitlist slots out of total, how fresh the observation is, and a Remove
+ * control. The whole box links to the official Berkeley page, whose URL is
+ * DERIVED from the classKey — never stored, never taken from the scraped page.
+ *
+ * Every observation is nullable: a watch added moments ago has no `class_state`
+ * row yet and legitimately shows dashes everywhere. That is a normal new watch,
+ * not an error, and must never look like a failure.
+ */
+function WatchCard({
+  classKey,
+  freshness,
+  onRemove,
+  removing,
+  disabled,
+}: {
+  classKey: ClassKey;
+  freshness: WatchFreshness | undefined;
+  onRemove: () => void;
+  removing: boolean;
+  disabled: boolean;
+}): React.ReactElement {
+  const seats = freshness ? formatOutOf(freshness.openSeats, freshness.capacity) : UNKNOWN;
+  const waitlist = freshness
+    ? formatOutOf(openWaitlistSlots(freshness), freshness.waitlistMax)
+    : UNKNOWN;
+  const heading = freshness?.displayName ?? classKey;
+
+  return (
+    <li className="watch-card">
+      <div className="watch-card__head">
+        <h4 className="watch-card__title">{heading}</h4>
+        {/*
+         * Only show the code separately when we have a real display name.
+         * Without one the title already IS the class key, and rendering it twice
+         * is visual noise that also makes the box ambiguous to a screen reader.
+         */}
+        {freshness?.displayName == null ? null : (
+          <code className="watch-card__code">{classKey}</code>
+        )}
+      </div>
+
+      <dl className="watch-card__stats">
+        <div className="watch-card__stat">
+          <dt>Open seats</dt>
+          <dd>{seats}</dd>
+        </div>
+        <div className="watch-card__stat">
+          <dt>Open waitlist spots</dt>
+          <dd>{waitlist}</dd>
+        </div>
+      </dl>
+
+      <FreshnessStatus freshness={freshness} />
+
+      <div className="watch-card__actions">
+        <a
+          href={classPageUrl(classKey)}
+          rel="noopener noreferrer"
+          target="_blank"
+          // The visible text is the same for every card, so the accessible name
+          // must name the class or a screen-reader user hears "official page"
+          // four times with no way to tell them apart.
+          aria-label={`Open the official Berkeley page for ${heading} in a new tab`}
+        >
+          Official page
+        </a>
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={removing || disabled}
+          aria-busy={removing}
+          aria-label={`Remove watch for ${heading}`}
+        >
+          {removing ? 'Removing…' : 'Remove'}
+        </button>
+      </div>
+    </li>
+  );
+}
+
+function FreshnessStatus({
+  freshness,
+}: {
+  freshness: WatchFreshness | undefined;
+}): React.ReactElement {
+  if (freshness === undefined) {
+    return (
+      <p className="watch-freshness watch-freshness--stale">
+        Source freshness is unavailable — treat this watch as stale and try reloading.
+      </p>
+    );
+  }
+
+  if (freshness.lastCheckedAt === null) {
+    return (
+      <p className="watch-freshness watch-freshness--stale">
+        Source status is stale — waiting for the first successful check of Berkeley&apos;s public
+        page.
+      </p>
+    );
+  }
+
+  return (
+    <p className={`watch-freshness${freshness.sourceStale ? ' watch-freshness--stale' : ''}`}>
+      {freshness.sourceStale ? 'Source status is stale.' : 'Source recently checked.'}{' '}
+      Berkeley&apos;s public page was last checked{' '}
+      <time dateTime={freshness.lastCheckedAt}>{formatCheckedAt(freshness.lastCheckedAt)}</time>.
+    </p>
+  );
 }
 
 export function ManageView({ token }: ManageViewProps): React.ReactElement {
@@ -105,7 +293,14 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
       const updated = await addWatch(token, newClass.trim());
       setLoad((prev) =>
         prev.status === 'ready'
-          ? { status: 'ready', data: { ...prev.data, watches: updated.watches } }
+          ? {
+              status: 'ready',
+              data: {
+                ...prev.data,
+                watches: updated.watches,
+                watchFreshness: updated.watchFreshness,
+              },
+            }
           : prev,
       );
       setNewClass('');
@@ -115,8 +310,21 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
       if (err instanceof ApiClientError) {
         if (err.error.code === 'conflict') {
           setAddError('already watching this class');
+        } else if (err.error.code === 'watch_limit_reached') {
+          // Distinct from `conflict` on purpose: the student is NOT already
+          // watching this class, and distinct from `capacity_exceeded`, which
+          // tells them to wait. Waiting never clears this — only they can.
+          setAddError(
+            `you are watching the maximum of ${MAX_WATCHES_PER_SUBSCRIBER} classes — remove one above to free a slot`,
+          );
         } else if (err.error.code === 'validation_error') {
           setAddError(err.error.fields?.['classKey'] ?? err.error.message);
+        } else if (err.error.code === 'payload_too_large') {
+          setActionError('this request is too large — shorten the class identifier and try again');
+        } else if (err.error.code === 'capacity_exceeded') {
+          setActionError(
+            `Seat Sniper has reached its current public-page monitoring capacity. Try again ${describeRetryAfter(err.retryAfterSeconds)}; your existing watches remain active.`,
+          );
         } else {
           setActionError(err.error.message);
         }
@@ -139,7 +347,13 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
         if (prev.status !== 'ready') return prev;
         return {
           status: 'ready',
-          data: { ...prev.data, watches: prev.data.watches.filter((k) => k !== classKey) },
+          data: {
+            ...prev.data,
+            watches: prev.data.watches.filter((k) => k !== classKey),
+            watchFreshness: prev.data.watchFreshness.filter(
+              (freshness) => freshness.classKey !== classKey,
+            ),
+          },
         };
       });
       // Return focus to heading after the list shrinks
@@ -229,6 +443,24 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
       <p>
         Subscribed as <strong>{data.email}</strong>.
       </p>
+      <p className="hint">
+        A confirmed Berkeley address proves control of that mailbox; it does not verify current
+        enrollment or eligibility for a particular seat.
+      </p>
+
+      {!data.confirmed && (
+        <div className="pending-banner" role="status" aria-live="polite">
+          <p>
+            <strong>Confirm your email to start receiving alerts.</strong> Your subscription is
+            pending — we won&apos;t send any alerts until you confirm. Check your inbox for the
+            confirmation link, or request a fresh one below.
+          </p>
+          <ResendLinkForm
+            heading="Resend my confirmation link"
+            headingId="pending-resend-heading"
+          />
+        </div>
+      )}
 
       {actionError && (
         <p role="alert" className="error-banner">
@@ -236,29 +468,45 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
         </p>
       )}
 
-      {/* Watch list */}
+      {/* Watch dashboard (FR-25) */}
       <section aria-labelledby="watches-heading">
-        <h3 id="watches-heading">Current watches</h3>
+        <h3 id="watches-heading">Classes you are watching</h3>
+        <p className="hint">
+          Availability comes from Berkeley&apos;s public class pages, not SIS. Their cache can delay
+          changes; we aim to notify within two minutes after a change becomes visible to this
+          service. A dash means we have not read that number yet.
+        </p>
+        <p className="watch-slots" role="status">
+          {/* The cap is only actionable if the student can see where they stand. */}
+          Using {data.watches.length} of {MAX_WATCHES_PER_SUBSCRIBER} slots.{' '}
+          {data.watches.length >= MAX_WATCHES_PER_SUBSCRIBER
+            ? 'Remove one below to free a slot for a different class.'
+            : `You can add ${MAX_WATCHES_PER_SUBSCRIBER - data.watches.length} more.`}
+        </p>
         {data.watches.length === 0 ? (
           <p>You are not watching any classes. Add one below.</p>
         ) : (
-          <ul aria-label="watched classes">
-            {data.watches.map((classKey) => (
-              <li key={classKey} className="watch-item">
-                <code>{classKey}</code>
-                <button
-                  type="button"
-                  onClick={() => {
+          <ul className="watch-grid" aria-label="watched classes">
+            {data.watches.map((classKey, index) => {
+              const freshness = data.watchFreshness[index];
+              // The contract guarantees same-order entries and the client
+              // validates that on arrival, but re-check per row: mislabeling one
+              // class with another's seat counts would send a student to drop the
+              // wrong class.
+              const matchingFreshness = freshness?.classKey === classKey ? freshness : undefined;
+              return (
+                <WatchCard
+                  key={classKey}
+                  classKey={classKey as ClassKey}
+                  freshness={matchingFreshness}
+                  onRemove={() => {
                     void handleRemoveWatch(classKey as ClassKey);
                   }}
-                  disabled={removeBusy === classKey || unsubBusy}
-                  aria-busy={removeBusy === classKey}
-                  aria-label={`Remove watch for ${classKey}`}
-                >
-                  {removeBusy === classKey ? 'Removing…' : 'Remove'}
-                </button>
-              </li>
-            ))}
+                  removing={removeBusy === classKey}
+                  disabled={unsubBusy}
+                />
+              );
+            })}
           </ul>
         )}
       </section>
@@ -266,6 +514,18 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
       {/* Add watch */}
       <section aria-labelledby="add-watch-heading">
         <h3 id="add-watch-heading">Add a class to watch</h3>
+        {/*
+         * At the cap, gate the form rather than let the student type a class and
+         * discover the rule from a server error. The `watch_limit_reached`
+         * branch in handleAddWatch stays as the backstop: this view can be stale
+         * (another tab, or a revived watch), so the server remains authoritative.
+         */}
+        {data.watches.length >= MAX_WATCHES_PER_SUBSCRIBER && (
+          <p className="field-error" role="status">
+            You are watching the maximum of {MAX_WATCHES_PER_SUBSCRIBER} classes. Remove one above
+            to free a slot.
+          </p>
+        )}
         <form
           onSubmit={(e) => {
             void handleAddWatch(e);
@@ -292,7 +552,7 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
               aria-invalid={addFieldTouched && addError !== undefined}
               aria-describedby={addFieldTouched && addError ? 'add-class-error' : undefined}
               placeholder="e.g. 2026-fall-compsci-189-001-lec-001"
-              disabled={addBusy || unsubBusy}
+              disabled={addBusy || unsubBusy || data.watches.length >= MAX_WATCHES_PER_SUBSCRIBER}
             />
             {addFieldTouched && addError && (
               <span id="add-class-error" role="alert" className="field-error">
@@ -300,11 +560,18 @@ export function ManageView({ token }: ManageViewProps): React.ReactElement {
               </span>
             )}
           </div>
-          <button type="submit" disabled={addBusy || unsubBusy} aria-busy={addBusy}>
+          <button
+            type="submit"
+            disabled={addBusy || unsubBusy || data.watches.length >= MAX_WATCHES_PER_SUBSCRIBER}
+            aria-busy={addBusy}
+          >
             {addBusy ? 'Adding…' : 'Add watch'}
           </button>
         </form>
       </section>
+
+      {/* Web push opt-in (per-browser, additive — FR-15) */}
+      <PushToggle token={token} confirmed={data.confirmed} />
 
       {/* Unsubscribe */}
       <section aria-labelledby="unsub-heading">

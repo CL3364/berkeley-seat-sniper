@@ -1,0 +1,9 @@
+# Synthetic fixture (review m6): a multi-User-agent group. Several consecutive
+# User-agent lines share ONE rule block; the rules apply to ALL listed agents
+# (RFC 9309 2.2.1). Our token is listed FIRST, a non-matching agent SECOND, so
+# the old parser overwrote its match to false on the second line and dropped the
+# Disallow (under-block). The match must now be OR'd across the header lines.
+# Expected effect: the class content path is DISALLOWED -> fetchClass skips it.
+User-agent: berkeley-seat-sniper
+User-agent: SomeOtherBot
+Disallow: /content/

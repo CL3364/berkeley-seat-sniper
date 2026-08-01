@@ -1,0 +1,6 @@
+# Synthetic fixture: robots.txt that explicitly disallows the class content path.
+# Used to verify the RFC 9309 posture: an explicit Disallow match must STOP the
+# class fetch and surface as parser-broke (class still exists; watch not retired).
+# Expected effect: the class content path is DISALLOWED → fetchClass skips it.
+User-agent: *
+Disallow: /content/

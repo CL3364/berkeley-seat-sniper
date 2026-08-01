@@ -6,27 +6,106 @@
 #
 # The app service (Hono) serves both /api/* routes and the SPA (dist/web) on port 8787.
 # All traffic is proxied to it; no separate static-file handling needed at this layer.
+{
+	# The container runs as an unprivileged user. Host ports 80/443 map to these
+	# high container ports, preserving ACME HTTP/TLS challenge behavior.
+	http_port 8080
+	https_port 8443
+
+	servers {
+		max_header_size 32KB
+		timeouts {
+			read_header 10s
+			read_body 15s
+			write 180s
+			idle 2m
+		}
+	}
+
+	# Reverse-proxy runtime errors include a structured request object even when
+	# access logging is disabled. Remove the URI (tokens live in query/path) and
+	# all request headers (Referer can repeat the query token) before encoding.
+	log default {
+		format filter {
+			fields {
+				request>uri delete
+				request>headers delete
+			}
+		}
+	}
+}
 
 {$CADDY_SITE_ADDRESS} {
-    # Proxy all requests to the Hono application server.
-    # `app` is the Docker Compose service name; resolves inside the shared network.
-    reverse_proxy app:8787
+	# Container orchestration probes the app directly. Neither liveness nor the
+	# DB/Redis/worker-backed readiness report is part of the public API.
+	@internal_probe path /api/health /api/ready
+	respond @internal_probe 404
 
-    # Structured access logs; omit subscriber-identifying headers (no auth headers logged).
-    log {
-        output stdout
-        format json
-    }
+	# Resend/Svix webhooks have an exact 32 KiB raw-body ceiling at both edge and
+	# application. Every other request retains the general 64 KiB ceiling.
+	@resend_webhook path /api/webhooks/resend
+	request_body @resend_webhook {
+		max_size 32KiB
+	}
+	@non_resend_webhook not path /api/webhooks/resend
+	request_body @non_resend_webhook {
+		max_size 64KiB
+	}
 
-    # Reasonable header hardening.
-    header {
-        # Prevent MIME sniffing.
-        X-Content-Type-Options nosniff
-        # Disallow framing except same-origin.
-        X-Frame-Options SAMEORIGIN
-        # Force HTTPS for one year (only meaningful when TLS is active).
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
-        # Remove the server banner.
-        -Server
-    }
+	# Proxy all requests to the Hono application server.
+	# `app` is the Docker Compose service name; resolves inside the shared network.
+	reverse_proxy app:8787 {
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 150s
+		}
+
+		# Caddy ignores an inbound X-Forwarded-For by default and supplies the
+		# direct client address. Authenticate this private proxy hop separately:
+		# delete any client-supplied copy, then overwrite it with the shared
+		# high-entropy secret. The API trusts forwarding data only when this value
+		# matches timing-safely; private source addressing alone is insufficient.
+		header_up -Forwarded
+		header_up -X-Real-IP
+		header_up -X-Seat-Sniper-Proxy-Secret
+		header_up X-Seat-Sniper-Proxy-Secret "{$PROXY_HEADER_SECRET}"
+	}
+
+	# Deliberately no access-log directive. Confirm/manage tokens are bearer
+	# credentials carried in query strings and API paths, so request URIs must not
+	# be retained. The global runtime-log filter above removes the same fields
+	# from proxy errors while keeping non-request operational diagnostics.
+
+	# Reasonable header hardening.
+	header {
+		# Prevent MIME sniffing.
+		X-Content-Type-Options nosniff
+		# Bearer tokens travel in paths/query strings. Never forward them as a
+		# Referer and never permit a containing page to frame the dashboard.
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		Content-Security-Policy "default-src 'self'; base-uri 'none'; connect-src 'self'; font-src 'self'; form-action 'self'; frame-ancestors 'none'; img-src 'self' data:; object-src 'none'; script-src 'self'; style-src 'self'; worker-src 'self'"
+		Permissions-Policy "camera=(), display-capture=(), geolocation=(), microphone=(), payment=(), usb=()"
+		Cross-Origin-Opener-Policy same-origin
+		Cross-Origin-Resource-Policy same-origin
+		# Force HTTPS for one year (only meaningful when TLS is active).
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Remove the server banner.
+		-Server
+	}
+
+	# API data and token-bearing root pages must not enter intermediary caches.
+	@private_response {
+		path / /api/*
+	}
+	header @private_response Cache-Control "no-store"
+
+	# The application independently enforces the same bound and supplies this
+	# canonical envelope. This edge response handles bodies rejected before the
+	# reverse proxy can invoke Hono.
+	handle_errors {
+		@payload_too_large expression {err.status_code} == 413
+		header @payload_too_large Content-Type application/json
+		respond @payload_too_large `{"error":{"code":"payload_too_large","message":"request body is too large"}}` 413
+	}
 }

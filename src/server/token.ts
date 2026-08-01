@@ -12,10 +12,20 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-export const TOKEN_TTL_SECONDS = parseInt(
-  process.env.TOKEN_TTL_SECONDS ?? String(30 * 24 * 60 * 60),
-  10,
-);
+function readTokenTtlSeconds(): number {
+  const raw = process.env.TOKEN_TTL_SECONDS?.trim();
+  if (!raw) return 30 * 24 * 60 * 60;
+  if (!/^\d+$/.test(raw)) {
+    throw new Error('TOKEN_TTL_SECONDS must be a positive integer');
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error('TOKEN_TTL_SECONDS must be a positive integer');
+  }
+  return parsed;
+}
+
+export const TOKEN_TTL_SECONDS = readTokenTtlSeconds();
 
 /** Payload embedded in the token. */
 interface TokenPayload {
@@ -60,14 +70,31 @@ function sign(payload: string, secret: Buffer): string {
  *
  * The token encodes the subscriberId and an expiry. It is NOT stored in the DB.
  */
-export function mintToken(subscriberId: string): string {
+function mintTokenAtEpochSeconds(subscriberId: string, issuedAtSeconds: number): string {
   const payload: TokenPayload = {
     sub: subscriberId,
-    exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS,
+    exp: issuedAtSeconds + TOKEN_TTL_SECONDS,
   };
   const payloadB64 = toBase64url(Buffer.from(JSON.stringify(payload), 'utf8'));
   const sig = sign(payloadB64, getSecret());
   return `${payloadB64}.${sig}`;
+}
+
+export function mintToken(subscriberId: string): string {
+  return mintTokenAtEpochSeconds(subscriberId, Math.floor(Date.now() / 1000));
+}
+
+/**
+ * Mint the deterministic manage token embedded in one durable opening alert.
+ * Retries must reproduce the exact provider payload while reusing the same
+ * idempotency key; a fresh time-based token changes both the body and headers.
+ */
+export function mintOpeningToken(subscriberId: string, openedAt: string): string {
+  const openedAtMs = Date.parse(openedAt);
+  if (!Number.isFinite(openedAtMs)) {
+    throw new TypeError('openedAt must be an ISO-8601 timestamp');
+  }
+  return mintTokenAtEpochSeconds(subscriberId, Math.floor(openedAtMs / 1000));
 }
 
 /**

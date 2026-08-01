@@ -6,8 +6,10 @@ conversation uses a word, the conflict gets resolved here first.
 
 ## Glossary
 
-- **Subscriber** — a person who has asked to be alerted, identified solely by an email
-  address. There is no password and no account; the email _is_ the identity.
+- **Subscriber** — a person who has asked to be alerted, identified solely by a normalized
+  exact `@berkeley.edu` email address. There is no password and no account; the email _is_
+  the identity. The domain rule and Confirmation prove mailbox control, not current
+  enrollment, CalNet affiliation, or eligibility for a particular Section.
 
 - **Pending Subscriber** — a Subscriber who has not yet proven control of their email.
   Receives no Alerts.
@@ -15,14 +17,30 @@ conversation uses a word, the conflict gets resolved here first.
 - **Confirmed Subscriber** — a Subscriber who has proven control of their email by
   following a Confirmation link. Only Confirmed Subscribers receive Alerts.
 
+- **Current Subscriber** — any Subscriber row that still exists, Pending or Confirmed.
+  Unsubscribe removes it; an expired Pending Subscriber leaves when the 72-hour purge
+  runs. The pilot's 100-person admission cap counts Current Subscribers.
+
+- **Admission mode** — the deployment-wide rule for creating NEW Subscribers:
+  **Closed** accepts none, **Pilot** requires the shared Pilot invite and has the
+  100-Current-Subscriber cap, and **Public** requires no invite. Admission mode does not
+  disable an existing Subscriber's Confirmation, resend, Manage link, Watches, push, or
+  unsubscribe.
+
+- **Pilot invite** — shared bearer access to request a new Subscriber during Pilot
+  admission. It is not a personal invitation, identity, Confirmation, or proof of
+  enrollment; it is valid for anyone who possesses it and can then control an exact
+  Berkeley mailbox.
+
 - **Confirmation** — the one-time act of proving control of an email address by
   following an out-of-band link sent to it. Turns a Pending Subscriber into a
-  Confirmed Subscriber. (See ADR 0001.)
+  Confirmed Subscriber. It is not proof of current student status. (See ADR 0001.)
 
 - **Section** — the unit that is watched: one specific Berkeley class section
   (a term + subject + course + section number + component such as lecture or
   discussion). A Section is **not** a Course — watching "CS 189" means watching a
-  particular section of it.
+  particular section of it. _(Realized in code as the canonical `ClassKey` / the
+  `class_\*` tables; wherever code says "class," read "Section.")\_
 
 - **Term** — a Berkeley enrollment period (e.g. Fall 2026). Every Section belongs to
   exactly one Term, named in the Section itself.
@@ -64,6 +82,9 @@ conversation uses a word, the conflict gets resolved here first.
 - **Alert** — a single outbound notification to one Confirmed Subscriber that a Section
   they Watch has had an Opening. The Alert states which kind of Opening (Seat or Waitlist)
   so a Subscriber is never misled into thinking a Waitlist Opening is an enrollable seat.
+  An Alert is delivered by email always; a Subscriber who has enabled web push on a
+  browser additionally receives it there. Push is additive — it never replaces email and
+  carries only Alerts (never Confirmation or Manage links).
 
 - **Manage link** — the no-password, signed, expiring bearer link a Subscriber uses to
   view, add, or remove Watches, or to unsubscribe. Possession of the link is authority;

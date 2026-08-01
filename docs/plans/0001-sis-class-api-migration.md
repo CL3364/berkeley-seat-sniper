@@ -1,9 +1,16 @@
 # Plan 0001 — Migrate availability source to the official Berkeley SIS Class API
 
-Status: Planned (not started)
+Status: Blocked indefinitely — not a v1 task under the current student-access policy
 Decision: [ADR 0002](../adr/0002-scrape-public-pages-with-api-migration-planned.md)
 Read this before implementing. The goal is to replace HTML scraping with the sanctioned
 API **behind the existing seam**, so only the scraper lane changes.
+
+> **Do not implement this plan under current conditions.** Berkeley does not grant
+> students access to the SIS Class API, and the owner cannot obtain a faculty/staff
+> sponsor. Public pages are the only v1 source under ADR 0002's owner-accepted,
+> permission-unconfirmed risk posture and mandatory source-safety controls. If legitimate
+> API access becomes available later, the architect must write a new ADR before
+> reactivating or revising the implementation steps below.
 
 ## Goal
 
@@ -62,7 +69,8 @@ change.
 
 - With `AVAILABILITY_SOURCE=api`, the worker's transition/dedupe/parser-broke behavior
   (AC-3..AC-6) is unchanged when driven by API fixtures.
-- Robots/ToS launch gate from ADR 0002 is no longer the blocker (API is sanctioned).
+- ADR 0002's public-source risk posture and robots/safety-stop launch controls no longer
+  apply to class availability once the sanctioned API is the sole source.
 - No secret in logs; `npm audit --omit=dev` still clean.
 
 ## Open questions

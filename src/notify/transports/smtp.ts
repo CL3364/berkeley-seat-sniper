@@ -1,149 +1,289 @@
 /**
- * Real-mail transport stub (Resend / SMTP adapter).
+ * Production Resend transport.
  *
- * Required env vars (names only — values NEVER committed or logged):
- *   MAIL_PROVIDER   'resend' | 'smtp'  (defaults to 'smtp' when unset)
- *   MAIL_FROM       sender address, e.g. alerts@yourdomain.com
- *
- *   Resend:
- *     RESEND_API_KEY  secret API key from resend.com
- *
- *   SMTP:
- *     SMTP_HOST       mail server hostname
- *     SMTP_PORT       mail server port (default 587)
- *     SMTP_USER       SMTP username / login
- *     SMTP_PASS       SMTP password
- *
- * This stub is intentionally thin: it validates that the required env vars are
- * present at construction time and then logs what it *would* send without
- * making an actual network call. Replace the stub body of `send` with a real
- * Resend SDK call or nodemailer invocation when the provider is ready — the
- * interface and env-var contract are stable.
- *
- * NEVER add any network call here that tests can trigger without guarding on
- * MAIL_TRANSPORT !== 'noop'. Tests wire the noop transport; this file is not
- * exercised in automated tests (by design — no real network in tests).
+ * The adapter returns classified outcomes instead of leaking provider response
+ * bodies or exception messages across the notify boundary. Every durable job
+ * uses one individual request with its own idempotency key. Requests share one
+ * start-rate budget (four requests/second by default) and every request has an
+ * absolute timeout.
  */
 
-import type { Transport, TransportMessage } from '../types';
+import { EmailSchema } from '../../shared/api';
+import { isReservedDeploymentHostname } from '../../shared/deployment-host';
+import { getSendTimeoutMs } from '../timeout';
+import type { ProviderOutcome, ProviderSuccess, Transport, TransportMessage } from '../types';
 
-interface ResendConfig {
+const RESEND_API_ORIGIN = 'https://api.resend.com';
+const RESEND_SINGLE_PATH = '/emails';
+const DEFAULT_RESEND_REQUESTS_PER_SECOND = 4;
+const DEFAULT_RATE_LIMIT_RETRY_MS = 1_000;
+const MAX_RATE_LIMIT_RETRY_MS = 60 * 60 * 1_000;
+
+export interface ResendConfig {
   provider: 'resend';
   apiKey: string;
   from: string;
+  requestsPerSecond?: number;
 }
 
-interface SmtpConfig {
-  provider: 'smtp';
-  host: string;
-  port: number;
-  user: string;
-  pass: string;
-  from: string;
+interface HeadersLike {
+  get(name: string): string | null;
 }
 
-type MailConfig = ResendConfig | SmtpConfig;
-
-/** Read and validate required env vars at construction time. Throws on missing keys. */
-function readConfig(): MailConfig {
-  const provider = process.env['MAIL_PROVIDER'] ?? 'smtp';
-  const from = process.env['MAIL_FROM'];
-  if (!from) throw new Error('MAIL_FROM env var is required for the real mail transport');
-
-  if (provider === 'resend') {
-    const apiKey = process.env['RESEND_API_KEY'];
-    if (!apiKey) throw new Error('RESEND_API_KEY env var is required when MAIL_PROVIDER=resend');
-    return { provider: 'resend', apiKey, from };
-  }
-
-  // Default: smtp
-  const host = process.env['SMTP_HOST'];
-  const user = process.env['SMTP_USER'];
-  const pass = process.env['SMTP_PASS'];
-  if (!host) throw new Error('SMTP_HOST env var is required for the smtp mail transport');
-  if (!user) throw new Error('SMTP_USER env var is required for the smtp mail transport');
-  if (!pass) throw new Error('SMTP_PASS env var is required for the smtp mail transport');
-
-  const portRaw = process.env['SMTP_PORT'];
-  const port = portRaw ? parseInt(portRaw, 10) : 587;
-  if (Number.isNaN(port)) throw new Error('SMTP_PORT must be a number');
-
-  return { provider: 'smtp', host, port, user, pass, from };
+interface FetchResponseLike {
+  ok: boolean;
+  status: number;
+  headers?: HeadersLike | Record<string, string | undefined>;
+  body?: { cancel(): Promise<void> } | null;
+  json?(): Promise<unknown>;
 }
 
 /**
- * Create the real-mail transport. Throws at construction time when required
- * env vars are missing, so misconfiguration surfaces at startup, not mid-cycle.
- *
- * Delivery failures are re-thrown so the Notifier layer can surface them to
- * the worker (the cycle fails loudly rather than silently dropping alerts).
+ * Minimal injectable fetch seam. It intentionally exposes no response text:
+ * provider error bodies can echo recipient PII and are never needed to classify
+ * an HTTP response.
  */
-export function createRealTransport(): Transport {
-  const config = readConfig();
+export type FetchLike = (
+  url: string,
+  init: {
+    method: string;
+    headers: Record<string, string>;
+    body: string;
+    signal: AbortSignal;
+  },
+) => Promise<FetchResponseLike>;
+
+/** Read and validate required env vars at construction time. */
+function readConfig(): ResendConfig {
+  const provider = process.env['MAIL_PROVIDER']?.trim() || 'resend';
+  const from = process.env['MAIL_FROM']?.trim();
+  if (!from) throw new Error('MAIL_FROM env var is required for the real mail transport');
+  if (/[\r\n]/.test(from)) throw new Error('MAIL_FROM must be a valid sender mailbox');
+
+  const displayMatch = /^.+\s<([^<>]+)>$/.exec(from);
+  const mailbox = displayMatch?.[1] ?? from;
+  const senderDomain = mailbox.slice(mailbox.lastIndexOf('@') + 1);
+  const placeholderSender =
+    process.env.NODE_ENV === 'production' && isReservedDeploymentHostname(senderDomain);
+  if (
+    !EmailSchema.safeParse(mailbox).success ||
+    (from.includes('<') && !displayMatch) ||
+    placeholderSender
+  ) {
+    throw new Error('MAIL_FROM must be a valid sender mailbox or "Display Name <mailbox>"');
+  }
+
+  if (provider !== 'resend') {
+    throw new Error(
+      `unknown MAIL_PROVIDER "${provider}" — Berkeley Seat Sniper v0.4 supports 'resend'`,
+    );
+  }
+
+  const apiKey = process.env['RESEND_API_KEY']?.trim();
+  if (!apiKey) throw new Error('RESEND_API_KEY env var is required when MAIL_PROVIDER=resend');
 
   return {
-    async send(message: TransportMessage): Promise<void> {
-      // Structured log — address is NOT included (PII rule / AC-8).
-      console.log(
-        JSON.stringify({
-          level: 'info',
-          transport: config.provider,
-          event: 'mail_attempt',
-          subject: message.subject,
-          from: message.from,
-        }),
-      );
+    provider: 'resend',
+    apiKey,
+    from,
+    requestsPerSecond: parseRequestBudget(process.env['RESEND_REQUESTS_PER_SECOND']),
+  };
+}
 
-      if (config.provider === 'resend') {
-        await sendViaResend(config, message);
-      } else {
-        await sendViaSmtp(config, message);
-      }
+function parseRequestBudget(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_RESEND_REQUESTS_PER_SECOND;
+  if (!/^\d+$/.test(raw.trim())) {
+    throw new Error('RESEND_REQUESTS_PER_SECOND must be a positive integer');
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 100) {
+    throw new Error('RESEND_REQUESTS_PER_SECOND must be an integer from 1 to 100');
+  }
+  return parsed;
+}
+
+/** Create the configured production adapter. */
+export function createRealTransport(): Transport {
+  return createResendTransport(readConfig(), globalThis.fetch as unknown as FetchLike);
+}
+
+/**
+ * Build a Resend adapter against an injectable fetch. One process-wide
+ * transport instance provides the global request scheduler.
+ */
+export function createResendTransport(config: ResendConfig, fetchImpl: FetchLike): Transport {
+  const timeoutMs = getSendTimeoutMs();
+  const reserveRequest = createStartRateBudget(
+    config.requestsPerSecond ?? DEFAULT_RESEND_REQUESTS_PER_SECOND,
+  );
+
+  async function request(
+    wireBody: unknown,
+    idempotencyKey: string | undefined,
+  ): Promise<ProviderOutcome> {
+    await reserveRequest();
+
+    let response: FetchResponseLike;
+    try {
+      response = await fetchImpl(`${RESEND_API_ORIGIN}${RESEND_SINGLE_PATH}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+          ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+        },
+        signal: AbortSignal.timeout(timeoutMs),
+        body: JSON.stringify(wireBody),
+      });
+    } catch {
+      return { status: 'retryable', errorCode: 'provider_network_error' };
+    }
+
+    if (response.ok) {
+      const acceptedAt = new Date();
+      const providerMessageId = await readAcceptedId(response);
+      const accepted: ProviderSuccess = providerMessageId
+        ? { status: 'success', acceptedAt, providerMessageId }
+        : { status: 'success', acceptedAt };
+      return accepted;
+    }
+
+    await discardBody(response);
+    return classifyHttpFailure(response);
+  }
+
+  return {
+    async send(message: TransportMessage): Promise<ProviderOutcome> {
+      logAttempt();
+      return request(toWireMessage(config.from, message), message.idempotencyKey);
     },
   };
 }
 
-/**
- * Send via Resend REST API. Swap the stub body for the real `fetch` call once
- * the dependency is approved (library-governance / constitution: no new runtime
- * dep without a clear reason; use the existing `fetch` global from Node 20+).
- */
-async function sendViaResend(config: ResendConfig, message: TransportMessage): Promise<void> {
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: config.from,
-      to: [message.to],
-      subject: message.subject,
-      text: message.body,
-    }),
-  });
+function toWireMessage(from: string, message: TransportMessage): Record<string, unknown> {
+  return {
+    from,
+    to: [message.to],
+    subject: message.subject,
+    text: message.body,
+    ...(message.headers ? { headers: message.headers } : {}),
+  };
+}
 
-  if (!response.ok) {
-    // Do not log the response body — it may contain PII or secrets.
-    throw new Error(`Resend API error: HTTP ${response.status}`);
+function classifyHttpFailure(response: FetchResponseLike): ProviderOutcome {
+  if (response.status === 429) {
+    return {
+      status: 'rate-limited',
+      errorCode: 'provider_rate_limited',
+      retryAfterMs: parseRetryAfterMs(readHeader(response.headers, 'retry-after')),
+    };
+  }
+  if (response.status === 408 || response.status >= 500) {
+    return {
+      status: 'retryable',
+      errorCode: `provider_http_${boundedHttpStatus(response.status)}`,
+    };
+  }
+  return {
+    status: 'permanent',
+    errorCode: `provider_http_${boundedHttpStatus(response.status)}`,
+  };
+}
+
+function boundedHttpStatus(status: number): string {
+  return Number.isSafeInteger(status) && status >= 100 && status <= 599
+    ? String(status)
+    : 'unknown';
+}
+
+function readHeader(headers: FetchResponseLike['headers'], name: string): string | undefined {
+  if (!headers) return undefined;
+  if ('get' in headers && typeof headers.get === 'function') {
+    return headers.get(name) ?? undefined;
+  }
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower && typeof value === 'string') return value;
+  }
+  return undefined;
+}
+
+function parseRetryAfterMs(raw: string | undefined): number {
+  if (!raw) return DEFAULT_RATE_LIMIT_RETRY_MS;
+  const trimmed = raw.trim();
+  let milliseconds: number;
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    milliseconds = Math.ceil(Number(trimmed) * 1_000);
+  } else {
+    const retryAt = Date.parse(trimmed);
+    milliseconds = Number.isNaN(retryAt) ? DEFAULT_RATE_LIMIT_RETRY_MS : retryAt - Date.now();
+  }
+  if (!Number.isFinite(milliseconds)) return DEFAULT_RATE_LIMIT_RETRY_MS;
+  return Math.min(
+    MAX_RATE_LIMIT_RETRY_MS,
+    Math.max(DEFAULT_RATE_LIMIT_RETRY_MS, Math.ceil(milliseconds)),
+  );
+}
+
+async function readAcceptedId(response: FetchResponseLike): Promise<string | undefined> {
+  if (!response.json) {
+    await discardBody(response);
+    return undefined;
+  }
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return undefined;
+  }
+
+  const record = isRecord(body) && isRecord(body['data']) ? body['data'] : body;
+  if (!isRecord(record)) return undefined;
+  const id = record['id'];
+  return typeof id === 'string' && id.length > 0 && id.length <= 512 ? id : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function discardBody(response: FetchResponseLike): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Socket cleanup is best effort and never changes the classified outcome.
   }
 }
 
 /**
- * Send via SMTP. Requires nodemailer at runtime — add it to dependencies when
- * this path is enabled. The stub throws a clear error rather than crashing
- * silently so the operator knows exactly what to add.
- *
- * Replace this stub with:
- *   import nodemailer from 'nodemailer';
- *   const transporter = nodemailer.createTransport({ host, port, auth: { user, pass } });
- *   await transporter.sendMail({ from, to, subject, text: body });
+ * FIFO start-rate scheduler. Provider calls can overlap, but no more than the
+ * configured number begin in any one-second interval.
  */
-async function sendViaSmtp(_config: SmtpConfig, message: TransportMessage): Promise<void> {
-  // STUB: Replace with real nodemailer invocation (add nodemailer to deps).
-  // Required fields from _config: host, port, user, pass, from.
-  throw new Error(
-    'SMTP transport is a stub. Add nodemailer to dependencies and replace this throw ' +
-      `with a real sendMail call. Message subject: ${message.subject}`,
+function createStartRateBudget(requestsPerSecond: number): () => Promise<void> {
+  const spacingMs = 1_000 / requestsPerSecond;
+  let nextStartAt = 0;
+  let tail = Promise.resolve();
+
+  return (): Promise<void> => {
+    const reservation = tail.then(async () => {
+      const waitMs = Math.max(0, nextStartAt - Date.now());
+      if (waitMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+      }
+      nextStartAt = Date.now() + spacingMs;
+    });
+    tail = reservation.catch(() => undefined);
+    return reservation;
+  };
+}
+
+function logAttempt(): void {
+  console.log(
+    JSON.stringify({
+      level: 'info',
+      transport: 'resend',
+      event: 'mail_attempt',
+    }),
   );
 }

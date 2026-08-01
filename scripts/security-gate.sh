@@ -22,8 +22,26 @@ missing() {  # $1 = tool name
 }
 
 if command -v gitleaks >/dev/null 2>&1; then
-  echo "== security-gate: secret scan (gitleaks) =="
-  gitleaks detect --no-banner --redact || STATUS=1
+  echo "== security-gate: secret scan — repository history (gitleaks) =="
+  gitleaks git --no-banner --redact . || STATUS=1
+
+  echo "== security-gate: secret scan — current build tree (gitleaks) =="
+  # A history-only scan misses every uncommitted file. That is especially unsafe
+  # during release verification, when Docker builds the working tree exactly as
+  # it sits on disk. Archive Git's tracked + untracked/non-ignored file set, then
+  # scan the archive so ignored local artifacts (.env, test output, browser
+  # captures) neither create false positives nor hide source that will be added.
+  GITLEAKS_TMP_DIR="$(mktemp -d)"
+  GITLEAKS_ARCHIVE="$GITLEAKS_TMP_DIR/current-build-tree.tar"
+  if git ls-files --cached --others --exclude-standard -z \
+    | tar --null -T - -cf "$GITLEAKS_ARCHIVE"; then
+    gitleaks dir --no-banner --redact --max-archive-depth 1 "$GITLEAKS_ARCHIVE" || STATUS=1
+  else
+    echo "security-gate: failed to assemble the current build tree for scanning." >&2
+    STATUS=1
+  fi
+  rm -f "$GITLEAKS_ARCHIVE"
+  rmdir "$GITLEAKS_TMP_DIR"
 else
   missing gitleaks
 fi
@@ -41,7 +59,20 @@ npm audit --audit-level=high \
 
 if command -v semgrep >/dev/null 2>&1; then
   echo "== security-gate: SAST (semgrep) =="
-  semgrep --error --config auto . || STATUS=1
+  # Scan the same tracked + untracked/non-ignored source set that can enter a
+  # release. Passing "." alone lets scanner/git-ignore interactions omit new
+  # files before their first commit, which is exactly when this local gate is
+  # most valuable.
+  SEMGREP_PATHS_FILE="$(mktemp)"
+  git ls-files --cached --others --exclude-standard -z -- \
+    '*.cjs' '*.js' '*.jsx' '*.mjs' '*.ts' '*.tsx' >"$SEMGREP_PATHS_FILE"
+  if [ -s "$SEMGREP_PATHS_FILE" ]; then
+    xargs -0 semgrep --error --config auto -- <"$SEMGREP_PATHS_FILE" || STATUS=1
+  else
+    echo "security-gate: no source files found for Semgrep." >&2
+    STATUS=1
+  fi
+  rm -f "$SEMGREP_PATHS_FILE"
 else
   missing semgrep
 fi

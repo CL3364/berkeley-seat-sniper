@@ -1,7 +1,7 @@
-# 8. Single-process deploy: migrate on boot, serve the SPA and the API together
+# 8. Single-VPS deploy: serve SPA/API together and migrate once
 
 Date: 2026-06-05
-Status: Accepted
+Status: Accepted — production migration mechanism superseded by 2026-07-23 amendment
 
 ## Context
 
@@ -43,3 +43,26 @@ This is an operational default with a clear, conventional trade-off — not a co
 product decision — so it is recorded as an ADR rather than run through a full grill session.
 The one thing a future reader will question ("why migrate on every boot?") is answered above,
 along with the scale caveat.
+
+## Amendment (2026-07-23)
+
+The single application image and combined SPA/API process remain accepted. The production
+topology is now one VPS with Caddy as the only public service, separate API and worker
+processes, PostgreSQL, and Redis on private Compose networks.
+
+The migrate-on-app-boot portion is superseded. Production schema changes run through the
+one-shot Compose `migrate` service before app/worker replacement. The server does not
+migrate on boot and rejects `AUTO_MIGRATE_DEV=1` in production; that switch exists only
+for process-owned local PGlite.
+
+Operational consequences:
+
+- Caddy obtains TLS and app/worker remain private.
+- App and worker wait on healthy PostgreSQL/Redis and a successful one-shot migration.
+- `/api/health` is liveness; `/api/ready` checks PostgreSQL, Redis, and outbox age. Both
+  are private operator probes through the Compose network.
+- The optional backup profile encrypts PostgreSQL dumps to off-host restic storage; the
+  isolated restore-check profile verifies the newest dump without touching production.
+
+These are implemented deployment mechanisms, not evidence that any production deploy,
+off-host snapshot, or restore drill has succeeded. See `docs/runbook-production.md`.

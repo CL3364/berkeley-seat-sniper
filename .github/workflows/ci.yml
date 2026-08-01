@@ -5,83 +5,318 @@ on:
     branches: ['**']
   pull_request:
     branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build-and-test:
-    name: typecheck · lint · test · security
+  quality:
+    name: format · lint · typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-    # Postgres service for integration tests that require a real DB.
+    steps:
+      - name: checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: setup node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: install dependencies
+        run: npm ci --no-audit --fund=false
+
+      - name: format check
+        run: npm run format:check
+
+      - name: lint
+        run: npm run lint -- --max-warnings=0
+
+      - name: typecheck
+        run: npm run typecheck
+
+  integration:
+    name: unit · integration · real postgres/redis
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
     services:
       postgres:
         image: postgres:16-alpine
         env:
           POSTGRES_DB: seatsniper_test
           POSTGRES_USER: seatsniper
-          POSTGRES_PASSWORD: ci_test_password
+          POSTGRES_PASSWORD: ci-test-password
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
         ports:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U seatsniper -d seatsniper_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
 
     env:
-      # Tests that skip the DB use PGlite; tests that need real Postgres use this.
-      DATABASE_URL: postgres://seatsniper:ci_test_password@localhost:5432/seatsniper_test
-      # TOKEN_SECRET must be non-empty for token signing/verification in tests.
-      TOKEN_SECRET: ci_test_token_secret_not_for_production
       NODE_ENV: test
+      SKIP_ENV_FILE: '1'
+      DATABASE_URL: postgres://seatsniper:ci-test-password@127.0.0.1:5432/seatsniper_test
+      TEST_DATABASE_URL: postgres://seatsniper:ci-test-password@127.0.0.1:5432/seatsniper_test
+      REDIS_URL: redis://127.0.0.1:6379/0
+      TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      TOKEN_SECRET: ci-test-token-secret-that-is-at-least-32-characters
       MAIL_TRANSPORT: noop
+      ADMISSION_MODE: public
 
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v4.2.2
+        with:
+          persist-credentials: false
 
       - name: setup node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
-          cache: 'npm'
+          cache: npm
 
       - name: install dependencies
-        run: npm ci
+        run: npm ci --no-audit --fund=false
 
-      # --- fast-gate: format + lint on all files (CI runs the full set) --------
-      - name: format check (prettier)
-        run: npx prettier --check .
+      - name: apply fresh postgres migrations
+        run: npm run db:migrate
 
-      - name: lint (eslint)
-        run: npx eslint . --max-warnings=0
+      - name: unit and integration tests
+        run: npm test
 
-      # --- integration-gate: typecheck + vitest --------------------------------
-      - name: typecheck (tsc)
-        run: npx tsc --noEmit
+  e2e:
+    name: browser journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
-      - name: unit + integration tests (vitest)
-        run: npx vitest run
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: seatsniper_e2e
+          POSTGRES_USER: seatsniper
+          POSTGRES_PASSWORD: ci-e2e-password
+          POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U seatsniper -d seatsniper_e2e"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
 
-      # --- integration-gate: playwright E2E -----------------------------------
-      - name: install playwright browsers
+    env:
+      NODE_ENV: test
+      SKIP_ENV_FILE: '1'
+      DATABASE_URL: postgres://seatsniper:ci-e2e-password@127.0.0.1:5432/seatsniper_e2e
+      REDIS_URL: redis://127.0.0.1:6379/0
+      TOKEN_SECRET: ci-e2e-token-secret-that-is-at-least-32-characters
+      MAIL_TRANSPORT: noop
+      ADMISSION_MODE: public
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: setup node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: install dependencies
+        run: npm ci --no-audit --fund=false
+
+      - name: apply fresh postgres migrations
+        run: npm run db:migrate
+
+      - name: install chromium
         run: npx playwright install --with-deps chromium
 
-      - name: e2e tests (playwright)
-        run: npx playwright test
+      - name: run browser journeys
+        run: npm run e2e
 
-      # --- security-gate (STRICT) ---------------------------------------------
-      # Install gitleaks + semgrep so the gate does not silently skip secret-scan
-      # or SAST. SECURITY_GATE_STRICT=1 turns a missing tool into a hard failure.
-      - name: install gitleaks
+      - name: upload playwright diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-diagnostics
+          path: |
+            playwright-report/
+            test-results/
+            !test-results/*outbox*.ndjson
+          if-no-files-found: ignore
+          retention-days: 7
+
+  container-smoke:
+    name: compose topology · image smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SKIP_ENV_FILE: '1'
+      POSTGRES_PASSWORD: ci-compose-password
+      TOKEN_SECRET: ci-compose-token-secret-that-is-at-least-32-characters
+      APP_BASE_URL: http://localhost
+      CADDY_BIND_ADDRESS: 127.0.0.1
+      MAIL_FROM: Seat Sniper CI <noreply@ci.invalid>
+      OPERATOR_EMAIL: ops@ci.invalid
+      RESEND_API_KEY: ci-compose-not-used
+      PROXY_HEADER_SECRET: ci-compose-proxy-secret-0000000000000001
+      ADMISSION_MODE: closed
+      FETCH_USER_AGENT: BerkeleySeatSniper/1 (+mailto:ops@berkeley.edu)
+      SEAT_SNIPER_IMAGE_TAG: ci
+      COMPOSE_FILE: docker-compose.yml:docker-compose.test.yml
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: generate synthetic webhook secret
         run: |
-          GITLEAKS_VERSION="8.21.2"
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
+          payload="$(openssl rand -base64 32 | tr -d '\n')"
+          printf 'RESEND_WEBHOOK_SECRET=wh%s_%s\n' 'sec' "$payload" >> "$GITHUB_ENV"
 
-      - name: install semgrep
-        run: pip install semgrep
+      - name: validate compose model
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          docker compose config --quiet
+          docker compose --profile backup --profile restore-check config --quiet
+          test "$(docker compose config --format json | jq -r '.services.worker.environment.KILL_SWITCH')" = 1
+          test "$(docker compose config --format json | jq -r '.services.worker.environment.SOURCE_REQUESTS_PER_SECOND')" = 1
+          test "$(docker compose config --format json | jq -r '.services.worker.environment.SOURCE_VISIBLE_TARGET_SECONDS')" = 120
+          test "$(docker compose config --format json | jq -r '.services.app.environment.SOURCE_REQUESTS_PER_SECOND')" = 1
+          test "$(docker compose config --format json | jq -r '.services.app.environment.SOURCE_VISIBLE_TARGET_SECONDS')" = 120
 
-      - name: security gate (strict)
+      - name: build application and operations images
+        run: docker compose --profile backup build app backup
+
+      - name: start production topology
+        run: docker compose up --detach --wait --wait-timeout 240
+
+      - name: verify ingress and private services
+        run: |
+          curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1/ >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1/api/health)" = 404
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1/api/ready)" = 404
+          docker compose exec -T app node -e \
+            "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"
+          docker compose exec -T app node -e \
+            "fetch('http://127.0.0.1:8787/api/ready').then(async r=>{const b=await r.json();process.exit(r.status===503&&b.worker?.disabled===true?0:1)}).catch(()=>process.exit(1))"
+          app_container="$(docker compose ps --quiet app)"
+          worker_container="$(docker compose ps --quiet worker)"
+          test "$(docker inspect "$app_container" --format '{{range .Mounts}}{{if eq .Destination "/app/runtime"}}{{.RW}}{{end}}{{end}}')" = false
+          test "$(docker inspect "$worker_container" --format '{{range .Mounts}}{{if eq .Destination "/app/runtime"}}{{.RW}}{{end}}{{end}}')" = true
+          test -z "$(docker compose port app 8787 2>/dev/null || true)"
+          test -z "$(docker compose port db 5432 2>/dev/null || true)"
+          test -z "$(docker compose port redis 6379 2>/dev/null || true)"
+          published="$(
+            docker compose ps --format json |
+              jq -r 'select((.Publishers // []) | length > 0) | .Service' |
+              sort -u
+          )"
+          test "$published" = caddy
+
+      - name: collect compose diagnostics
+        if: ${{ always() }}
+        run: |
+          mkdir -p test-results
+          docker compose ps --all > test-results/compose-ps.txt 2>&1 || true
+          docker compose logs --no-color > test-results/compose.log 2>&1 || true
+
+      - name: upload compose diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: compose-diagnostics
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: stop production topology
+        if: ${{ always() }}
+        run: docker compose down --volumes --remove-orphans
+
+  security:
+    name: dependency · secrets · sast
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: checkout full history
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: setup node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: install dependencies
+        run: npm ci --no-audit --fund=false
+
+      - name: install checksum-verified gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum --check
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: install pinned semgrep
+        run: |
+          python3 -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/python" -m pip install \
+            --disable-pip-version-check --no-cache-dir 'semgrep==1.171.0'
+          echo "$RUNNER_TEMP/semgrep/bin" >> "$GITHUB_PATH"
+
+      - name: strict security gate
         env:
           SECURITY_GATE_STRICT: '1'
         run: ./scripts/security-gate.sh

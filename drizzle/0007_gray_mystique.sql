@@ -1,0 +1,3 @@
+ALTER TABLE "watches" DROP CONSTRAINT "watches_live_class_key_length";--> statement-breakpoint
+ALTER TABLE "watches" ALTER COLUMN "activated_at" SET DEFAULT clock_timestamp();--> statement-breakpoint
+ALTER TABLE "watches" ADD CONSTRAINT "watches_live_class_key_valid" CHECK ("watches"."retired_at" is not null or "watches"."class_key" ~ '^[0-9]{4}-(fall|spring|summer)-[a-z0-9]{1,32}-[a-z0-9]{1,32}-[0-9]{3}-(lec|dis|lab|sem|fld|ind|stu|wbn)-[0-9]{3}$');

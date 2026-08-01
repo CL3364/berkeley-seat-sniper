@@ -19,9 +19,11 @@ import { z } from 'zod';
  *  - term-season    `fall` | `spring` | `summer`
  *  - subject        lowercase alnum slug    e.g. `compsci`
  *  - course         alnum, may include a letter suffix, e.g. `189`, `61a`
- *  - section-num    3 digits, zero-padded   e.g. `001`
- *  - component      `lec` | `dis` | `lab` | `sem` | `fld` | `ind` | `stu` | `wbn`
- *  - component-num  3 digits, zero-padded   e.g. `001`
+ *  - section-id     3–8 digits, or 1–8 lowercase alnum containing a letter
+ *                                             e.g. `001`, `999l`
+ *  - component      2–8 lowercase letters   e.g. `lec`, `col`, `grp`, `slf`
+ *  - component-id   3–8 digits, or 1–8 lowercase alnum containing a letter
+ *                                             e.g. `001`, `999l`
  *
  * The canonical form is deliberately the same slug Berkeley uses in its public
  * page path (`classes.berkeley.edu/content/<canonical>`), so URL inputs require
@@ -35,16 +37,37 @@ export type ClassKey = string & { readonly __brand: 'ClassKey' };
 export const TERM_SEASONS = ['fall', 'spring', 'summer'] as const;
 export type TermSeason = (typeof TERM_SEASONS)[number];
 
-/** Allowed section components in the canonical key. */
+/**
+ * Common component codes retained for UI suggestions and compatibility.
+ * This is intentionally not exhaustive: Berkeley currently publishes other
+ * alphabetic codes such as `col`, `grp`, `slf`, and `tut`.
+ */
 export const CLASS_COMPONENTS = ['lec', 'dis', 'lab', 'sem', 'fld', 'ind', 'stu', 'wbn'] as const;
-export type ClassComponent = (typeof CLASS_COMPONENTS)[number];
+export type CommonClassComponent = (typeof CLASS_COMPONENTS)[number];
+
+/** Validated component code; the public catalog, not this app, owns the vocabulary. */
+export type ClassComponent = string & { readonly __brand: 'ClassComponent' };
+
+/**
+ * Defensive external-input bounds. Berkeley subject/course identifiers are far
+ * shorter than this in practice; 32 characters preserves ample catalog headroom
+ * while keeping the canonical key safely indexable by PostgreSQL.
+ */
+export const CLASS_KEY_COMPONENT_MAX_LENGTH = 32;
+export const CLASS_KEY_IDENTIFIER_MAX_LENGTH = 8;
+export const CLASS_KEY_COMPONENT_CODE_MAX_LENGTH = 8;
+export const CLASS_KEY_INPUT_MAX_LENGTH = 512;
+export const CLASS_KEY_MAX_LENGTH = 104;
 
 /**
  * The canonical-form regex. Anchored, lowercase only. A value matching this is,
  * by definition, already canonical.
+ *
+ * MIRRORED in public/sw.js (service workers cannot import this module) — update
+ * both together.
  */
 export const CLASS_KEY_PATTERN =
-  /^(?<year>\d{4})-(?<season>fall|spring|summer)-(?<subject>[a-z0-9]+)-(?<course>[a-z0-9]+)-(?<section>\d{3})-(?<component>lec|dis|lab|sem|fld|ind|stu|wbn)-(?<componentNum>\d{3})$/;
+  /^(?<year>\d{4})-(?<season>fall|spring|summer)-(?<subject>[a-z0-9]{1,32})-(?<course>[a-z0-9]{1,32})-(?<section>(?:\d{3,8}|(?=[a-z0-9]{1,8}-)(?=[a-z0-9]*[a-z])[a-z0-9]+))-(?<component>[a-z]{2,8})-(?<componentNum>(?:\d{3,8}|(?=[a-z0-9]{1,8}$)(?=[a-z0-9]*[a-z])[a-z0-9]+))$/;
 
 /**
  * Zod schema for an ALREADY-canonical class key. Use this where a value is
@@ -54,8 +77,27 @@ export const CLASS_KEY_PATTERN =
  */
 export const ClassKeySchema = z
   .string()
+  .max(CLASS_KEY_MAX_LENGTH, 'canonical class key is too long')
   .regex(CLASS_KEY_PATTERN, 'must be a canonical class key, e.g. 2026-fall-compsci-189-001-lec-001')
   .transform((v) => v as ClassKey);
+
+/** Canonical origin of the public Berkeley class pages. */
+export const BERKELEY_CLASS_ORIGIN = 'https://classes.berkeley.edu';
+
+/**
+ * The official public page for a class, DERIVED from the canonical {@link ClassKey}.
+ *
+ * The dashboard's per-class link and the alert email's link must be the same URL, and
+ * the spec (§4, FR-25) requires it be derived rather than stored per row or scraped from
+ * the page — a stored URL can drift from the key that identifies the watch, and a scraped
+ * one is attacker-influenced input from a third-party page.
+ *
+ * Pure and total: no I/O, never follows the URL. The input is already canonical (it came
+ * from {@link ClassKeySchema} or a prior API response), so this is a pure concatenation.
+ */
+export function classPageUrl(classKey: ClassKey): string {
+  return `${BERKELEY_CLASS_ORIGIN}/content/${classKey}`;
+}
 
 /**
  * Result of attempting to normalize raw input into a {@link ClassKey}.
@@ -78,7 +120,8 @@ export type NormalizeResult =
  *  - Case-insensitive on input; emits lowercase canonical output.
  *  - Trims surrounding whitespace and ignores the URL scheme/host/path prefix,
  *    extracting only the `content/<slug>` segment for URL inputs.
- *  - Zero-pads section and component numbers to 3 digits.
+ *  - Zero-pads numeric section and component identifiers to at least 3 digits;
+ *    preserves bounded alphanumeric identifiers such as `999L` as `999l`.
  *  - Returns `{ ok: false }` (never a partial/guessed key) when the term, season,
  *    or component cannot be determined — the UI surfaces this as an inline error
  *    (FR-1 / AC-2) rather than silently creating a wrong watch.
@@ -91,6 +134,9 @@ export function normalizeClassKey(input: string): NormalizeResult {
   // Total: guard non-string / nullish without throwing (callers are untyped at
   // the boundary; the input is UNTRUSTED).
   if (typeof input !== 'string') return { ok: false, reason: 'empty' };
+  if (input.length > CLASS_KEY_INPUT_MAX_LENGTH) {
+    return { ok: false, reason: 'invalid-field' };
+  }
 
   const trimmed = input.trim();
   if (trimmed === '') return { ok: false, reason: 'empty' };
@@ -137,8 +183,8 @@ function extractContentSlug(raw: string): string | null {
   return null;
 }
 
-/** Maps long-form / common component words to their canonical 3-letter code. */
-const COMPONENT_ALIASES: Record<string, ClassComponent> = {
+/** Maps long-form / common component words to their canonical catalog code. */
+const COMPONENT_ALIASES: Record<string, string> = {
   lec: 'lec',
   lecture: 'lec',
   dis: 'dis',
@@ -164,7 +210,8 @@ const SEASON_SET = new Set<string>(TERM_SEASONS);
  * (with arbitrary whitespace/hyphen/slash/comma separators):
  *   <year> <season> <subject> <course> <section> <component> [<componentNum>]
  * Year and season are REQUIRED (we never invent a term). `componentNum` defaults
- * to `001` when omitted. Section and component numbers are zero-padded to 3.
+ * to `001` when omitted. Numeric section and component identifiers are
+ * zero-padded to at least 3; alphanumeric identifiers are preserved.
  *
  * `lowered` is already lowercased + trimmed.
  */
@@ -185,28 +232,36 @@ function normalizeHumanCode(lowered: string): NormalizeResult {
 
   // subject — alnum slug.
   const subject = tokens[i++];
-  if (!/^[a-z0-9]+$/.test(subject)) return { ok: false, reason: 'invalid-field' };
+  if (subject.length > CLASS_KEY_COMPONENT_MAX_LENGTH || !/^[a-z0-9]+$/.test(subject)) {
+    return { ok: false, reason: 'invalid-field' };
+  }
 
   // course — alnum, may carry a letter suffix (e.g. `61a`).
   const course = tokens[i++];
-  if (!/^[a-z0-9]+$/.test(course)) return { ok: false, reason: 'invalid-field' };
+  if (course.length > CLASS_KEY_COMPONENT_MAX_LENGTH || !/^[a-z0-9]+$/.test(course)) {
+    return { ok: false, reason: 'invalid-field' };
+  }
 
-  // section number — numeric, zero-padded to 3.
+  // section identifier — bounded catalog id; numeric forms are zero-padded.
   const sectionRaw = tokens[i++];
-  if (!/^\d{1,3}$/.test(sectionRaw)) return { ok: false, reason: 'invalid-field' };
-  const section = sectionRaw.padStart(3, '0');
+  const section = normalizeCatalogIdentifier(sectionRaw);
+  if (!section) return { ok: false, reason: 'invalid-field' };
 
-  // component — required; accept canonical codes and common long forms.
+  // component — accept aliases plus any bounded alphabetic catalog code. Page
+  // identity validation in the scraper remains the authority that it exists.
   const componentToken = tokens[i++];
-  const component = COMPONENT_ALIASES[componentToken];
+  const component =
+    COMPONENT_ALIASES[componentToken] ??
+    (/^[a-z]{2,8}$/.test(componentToken) ? componentToken : undefined);
   if (!component) return { ok: false, reason: 'unrecognized-format' };
 
-  // component number — optional; default `001`, else numeric zero-padded to 3.
+  // component identifier — optional; default `001`, numeric forms zero-padded.
   let componentNum = '001';
   if (i < tokens.length) {
     const compNumRaw = tokens[i++];
-    if (!/^\d{1,3}$/.test(compNumRaw)) return { ok: false, reason: 'invalid-field' };
-    componentNum = compNumRaw.padStart(3, '0');
+    const normalizedComponentNum = normalizeCatalogIdentifier(compNumRaw);
+    if (!normalizedComponentNum) return { ok: false, reason: 'invalid-field' };
+    componentNum = normalizedComponentNum;
   }
 
   // Any leftover tokens mean the input did not match the expected shape.
@@ -222,6 +277,16 @@ function normalizeHumanCode(lowered: string): NormalizeResult {
 }
 
 /**
+ * Normalize one Berkeley section/component identifier. Purely numeric values
+ * are padded to the public-path minimum of three digits; longer numeric values
+ * and bounded alphanumeric values are preserved.
+ */
+function normalizeCatalogIdentifier(raw: string): string | null {
+  if (!/^[a-z0-9]{1,8}$/.test(raw)) return null;
+  return /^\d+$/.test(raw) ? raw.padStart(3, '0') : raw;
+}
+
+/**
  * Zod schema that accepts RAW user input (URL or code) and yields a canonical
  * {@link ClassKey}, or fails validation with a safe message. This is what the
  * API request schemas use so the boundary normalizes once (constitution: validate
@@ -229,6 +294,7 @@ function normalizeHumanCode(lowered: string): NormalizeResult {
  */
 export const ClassKeyInputSchema = z
   .string()
+  .max(CLASS_KEY_INPUT_MAX_LENGTH, 'class identifier is too long')
   .trim()
   .min(1, 'class identifier is required')
   .superRefine((raw, ctx) => {

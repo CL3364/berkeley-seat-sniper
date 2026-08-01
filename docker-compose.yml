@@ -1,81 +1,540 @@
-# docker-compose.yml — local and staging orchestration for Berkeley Seat Sniper.
+# docker-compose.yml — hardened single-VPS topology for Berkeley Seat Sniper.
 #
-# Services:
-#   db     — Postgres 16 with a named volume and a healthcheck.
-#   app    — the Hono server; serves /api/* and the SPA (dist/web).
-#   worker — the seat-sniper poller. Shares the same image as `app` (built once
-#            from the Dockerfile); started with `npm run worker` instead of the
-#            default CMD so the two processes are independently restartable.
+# Only Caddy publishes host ports. The API, worker, PostgreSQL, and Redis are
+# reachable solely on private Compose networks. Run schema changes through the
+# one-shot `migrate` service before either long-running application process.
 #
-# Secrets are NEVER hardcoded here. Provide them in a .env file (gitignored) or
-# via your deploy environment. See env.example for the full variable list.
+# Optional operations:
+#   docker compose --profile backup up -d backup
+#   docker compose --profile restore-check run --rm restore-check
+#
+# Backups use restic's client-side encryption and an off-host repository. An
+# external scheduler is unnecessary while the `backup` profile is running: it
+# performs an immediate backup and repeats at BACKUP_INTERVAL_SECONDS.
+
+x-app-image: &app-image
+  image: ${COMPOSE_PROJECT_NAME:-seat-sniper}-app:${SEAT_SNIPER_IMAGE_TAG:-local}
+  build:
+    context: .
+    target: app
+
+x-db-ops-image: &db-ops-image
+  image: ${COMPOSE_PROJECT_NAME:-seat-sniper}-db-ops:${SEAT_SNIPER_IMAGE_TAG:-local}
+  build:
+    context: .
+    target: db-ops
+
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: '5'
 
 services:
+  caddy:
+    image: caddy:2.11.4-alpine
+    user: '1000:1000'
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - '${CADDY_BIND_ADDRESS:-127.0.0.1}:80:8080'
+      - '${CADDY_BIND_ADDRESS:-127.0.0.1}:443:8443'
+      - '${CADDY_BIND_ADDRESS:-127.0.0.1}:443:8443/udp'
+    environment:
+      CADDY_SITE_ADDRESS: ${APP_BASE_URL:?set the production APP_BASE_URL in .env}
+      PROXY_HEADER_SECRET: ${PROXY_HEADER_SECRET:?set PROXY_HEADER_SECRET in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    networks:
+      - edge
+    healthcheck:
+      test: ['CMD', 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *json-logging
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.50
+    pids_limit: 128
+
   db:
     image: postgres:16-alpine
+    init: true
     restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_DB: seatsniper
       POSTGRES_USER: seatsniper
-      # POSTGRES_PASSWORD must be set in your .env — never hardcoded.
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      HEALTH_DISK_MIN_FREE_KB: ${HEALTH_DISK_MIN_FREE_KB:-1048576}
     volumes:
       - db_data:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /var/run/postgresql:rw,nosuid,nodev,size=16m
+    networks:
+      - data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U seatsniper -d seatsniper']
+      test:
+        - CMD-SHELL
+        - >-
+          pg_isready -U seatsniper -d seatsniper &&
+          test "$$(df -Pk /var/lib/postgresql/data | awk 'END {print $$4}')"
+          -ge "$${HEALTH_DISK_MIN_FREE_KB}"
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 10
+      start_period: 20s
+    stop_grace_period: 1m
+    logging: *json-logging
+    mem_limit: 1g
+    mem_reservation: 256m
+    cpus: 1.00
+    pids_limit: 256
 
-  app:
-    build: .
+  redis:
+    image: redis:7.4-alpine
+    init: true
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - redis-server
+      - --appendonly
+      - 'yes'
+      - --appendfsync
+      - everysec
+      - --save
+      - '60'
+      - '1000'
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-128mb}
+      - --maxmemory-policy
+      - noeviction
+      - --loglevel
+      - warning
+    volumes:
+      - redis_data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    networks:
+      - data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    stop_grace_period: 30s
+    logging: *json-logging
+    mem_limit: 192m
+    mem_reservation: 32m
+    cpus: 0.50
+    pids_limit: 128
+
+  # The only process authorized to change the schema in this topology.
+  migrate:
+    <<: *app-image
+    init: true
+    restart: 'no'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       db:
         condition: service_healthy
-    ports:
-      - '8787:8787'
+    command: ['node_modules/.bin/tsx', 'src/db/migrate.ts']
+    healthcheck:
+      disable: true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://seatsniper@db:5432/seatsniper
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-5000}
+      DB_QUERY_TIMEOUT_MS: ${DB_QUERY_TIMEOUT_MS:-20000}
+      DB_LOCK_TIMEOUT_MS: ${DB_LOCK_TIMEOUT_MS:-5000}
+      DB_MIGRATION_TIMEOUT_MS: ${DB_MIGRATION_TIMEOUT_MS:-600000}
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    networks:
+      - data
+    logging: *json-logging
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 1.00
+    pids_limit: 192
+
+  app:
+    <<: *app-image
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 8787
-      # DATABASE_URL points to the db service; password interpolated from env.
-      DATABASE_URL: postgres://seatsniper:${POSTGRES_PASSWORD}@db:5432/seatsniper
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      DATABASE_URL: postgres://seatsniper@db:5432/seatsniper
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      REDIS_URL: redis://redis:6379/0
+      DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-5000}
+      DB_QUERY_TIMEOUT_MS: ${DB_QUERY_TIMEOUT_MS:-20000}
+      DB_LOCK_TIMEOUT_MS: ${DB_LOCK_TIMEOUT_MS:-5000}
+      TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
       TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-2592000}
-      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-noop}
-      MAIL_FROM: ${MAIL_FROM:-alerts@example.edu}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      SMTP_URL: ${SMTP_URL:-}
-      FETCH_USER_AGENT: ${FETCH_USER_AGENT:-BerkeleySeatSniper/0.2 (+mailto:ops@example.edu)}
-      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-120}
-      POLL_JITTER_SECONDS: ${POLL_JITTER_SECONDS:-20}
-      KILL_SWITCH: ${KILL_SWITCH:-0}
-      RESPECT_ROBOTS: ${RESPECT_ROBOTS:-1}
+      APP_BASE_URL: ${APP_BASE_URL:?set the production APP_BASE_URL in .env}
+      ADMISSION_MODE: ${ADMISSION_MODE:-closed}
+      PILOT_INVITE_CODE: ${PILOT_INVITE_CODE:-}
+      CADDY_BIND_ADDRESS: ${CADDY_BIND_ADDRESS:-127.0.0.1}
+      MAIL_TRANSPORT: real
+      MAIL_PROVIDER: resend
+      MAIL_FROM: ${MAIL_FROM:?set MAIL_FROM in .env}
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL:?set OPERATOR_EMAIL in .env}
+      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}
+      RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:?set RESEND_WEBHOOK_SECRET in .env}
+      SEND_TIMEOUT_MS: ${SEND_TIMEOUT_MS:-10000}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      WORKER_HEARTBEAT_FILE: /app/runtime/seat-sniper-worker-heartbeat
+      WORKER_HEALTH_MAX_STALE_SECONDS: ${WORKER_HEALTH_MAX_STALE_SECONDS:-900}
+      RATE_LIMIT_SUBSCRIBE_MAX: ${RATE_LIMIT_SUBSCRIBE_MAX:-5}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_EMAIL_MAX: ${RATE_LIMIT_EMAIL_MAX:-3}
+      RATE_LIMIT_EMAIL_WINDOW_SECONDS: ${RATE_LIMIT_EMAIL_WINDOW_SECONDS:-900}
+      TRUST_PROXY: '1'
+      PROXY_HEADER_SECRET: ${PROXY_HEADER_SECRET:?set PROXY_HEADER_SECRET in .env}
+      DISABLE_RATE_LIMIT: '0'
+      SOURCE_VISIBLE_TARGET_SECONDS: ${SOURCE_VISIBLE_TARGET_SECONDS:-120}
+      SOURCE_REQUESTS_PER_SECOND: ${SOURCE_REQUESTS_PER_SECOND:-1}
+      HEALTH_SOURCE_MAX_STALE_SECONDS: ${HEALTH_SOURCE_MAX_STALE_SECONDS:-240}
+      HEALTH_OUTBOX_MAX_AGE_SECONDS: ${HEALTH_OUTBOX_MAX_AGE_SECONDS:-120}
+      DISK_READINESS_PATH: /app/runtime
+      HEALTH_DISK_MIN_FREE_KB: ${HEALTH_DISK_MIN_FREE_KB:-1048576}
+      BACKUP_SUCCESS_MARKER_FILE: /app/backup-status/success.json
+      BACKUP_MAX_STALE_SECONDS: ${BACKUP_MAX_STALE_SECONDS:-5400}
+    volumes:
+      # Readiness consumes worker state, but the Internet-facing API never writes it.
+      - runtime_data:/app/runtime:ro
+      - backup_status:/app/backup-status:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    networks:
+      - edge
+      - data
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    stop_grace_period: 30s
+    logging: *json-logging
+    mem_limit: 512m
+    mem_reservation: 96m
+    cpus: 1.00
+    pids_limit: 192
 
-  # worker shares the same image as app (no second build). It runs the poller
-  # process independently so it can be restarted without touching the HTTP server.
+  # Exactly one long-running dispatcher/poller. The PostgreSQL advisory lease is
+  # the second line of defense if an operator accidentally starts another copy.
   worker:
-    build: .
-    # Override the default CMD to run the worker process instead of the server.
-    command: ['node_modules/.bin/tsx', 'src/worker/index.ts']
+    <<: *app-image
+    init: true
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command: ['node_modules/.bin/tsx', 'src/worker/index.ts']
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://seatsniper@db:5432/seatsniper
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      REDIS_URL: redis://redis:6379/0
+      DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-5000}
+      DB_QUERY_TIMEOUT_MS: ${DB_QUERY_TIMEOUT_MS:-20000}
+      DB_LOCK_TIMEOUT_MS: ${DB_LOCK_TIMEOUT_MS:-5000}
+      TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
+      TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-2592000}
+      APP_BASE_URL: ${APP_BASE_URL:?set the production APP_BASE_URL in .env}
+      CADDY_BIND_ADDRESS: ${CADDY_BIND_ADDRESS:-127.0.0.1}
+      MAIL_TRANSPORT: real
+      MAIL_PROVIDER: resend
+      MAIL_FROM: ${MAIL_FROM:?set MAIL_FROM in .env}
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL:?set OPERATOR_EMAIL in .env}
+      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}
+      RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:?set RESEND_WEBHOOK_SECRET in .env}
+      SEND_TIMEOUT_MS: ${SEND_TIMEOUT_MS:-10000}
+      RESEND_REQUESTS_PER_SECOND: ${RESEND_REQUESTS_PER_SECOND:-4}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      FETCH_USER_AGENT: ${FETCH_USER_AGENT:?set a contactable FETCH_USER_AGENT in .env}
+      FETCH_TIMEOUT_MS: ${FETCH_TIMEOUT_MS:-10000}
+      FETCH_MAX_BODY_BYTES: ${FETCH_MAX_BODY_BYTES:-1048576}
+      ROBOTS_CACHE_TTL_MS: ${ROBOTS_CACHE_TTL_MS:-40000}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-30}
+      POLL_JITTER_SECONDS: ${POLL_JITTER_SECONDS:-10}
+      MAX_BACKOFF_SECONDS: ${MAX_BACKOFF_SECONDS:-600}
+      MAX_CONSECUTIVE_CYCLE_FAILURES: ${MAX_CONSECUTIVE_CYCLE_FAILURES:-8}
+      # Owner-selected option A: one physical Berkeley-origin request/second globally.
+      # The 120-second target yields 96 slots; separate rollout gates keep egress disabled.
+      SOURCE_VISIBLE_TARGET_SECONDS: ${SOURCE_VISIBLE_TARGET_SECONDS:-120}
+      SOURCE_REQUESTS_PER_SECOND: ${SOURCE_REQUESTS_PER_SECOND:-1}
+      ALERT_EXPIRY_SECONDS: ${ALERT_EXPIRY_SECONDS:-3600}
+      PENDING_RETENTION_HOURS: ${PENDING_RETENTION_HOURS:-72}
+      TERMINAL_RETENTION_DAYS: ${TERMINAL_RETENTION_DAYS:-90}
+      RETENTION_SWEEP_INTERVAL_SECONDS: ${RETENTION_SWEEP_INTERVAL_SECONDS:-3600}
+      OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
+      OUTBOX_CLAIM_LEASE_SECONDS: ${OUTBOX_CLAIM_LEASE_SECONDS:-60}
+      WORKER_HEARTBEAT_FILE: /app/runtime/seat-sniper-worker-heartbeat
+      SOURCE_SAFETY_STOP_FILE: /app/runtime/seat-sniper-source-safety-stop.json
+      # The worker derives the sibling `.fence` path automatically.
+      SOURCE_ORIGIN_STATE_FILE: /app/runtime/seat-sniper-origin-state.json
+      WORKER_HEALTH_MAX_STALE_SECONDS: ${WORKER_HEALTH_MAX_STALE_SECONDS:-900}
+      HEALTH_SOURCE_MAX_STALE_SECONDS: ${HEALTH_SOURCE_MAX_STALE_SECONDS:-240}
+      HEALTH_OUTBOX_MAX_AGE_SECONDS: ${HEALTH_OUTBOX_MAX_AGE_SECONDS:-120}
+      # Owner accepts proceeding while source authorization remains unconfirmed.
+      # Only exact "0" opts in; all other values fail closed in the worker.
+      # The tracked rollout posture stays disabled until the separate live-source gates pass.
+      KILL_SWITCH: ${KILL_SWITCH:-1}
+      RESPECT_ROBOTS: ${RESPECT_ROBOTS:-1}
+    volumes:
+      - runtime_data:/app/runtime
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=128m
+    networks:
+      - data
+      - egress
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "const fs=require('node:fs');const p=process.env.WORKER_HEARTBEAT_FILE;const max=Number(process.env.WORKER_HEALTH_MAX_STALE_SECONDS)*1000;const now=Date.now();try{const marker=JSON.parse(fs.readFileSync(p,'utf8'));const age=now-marker.heartbeatAtMs;const live=marker.version===2&&Number.isSafeInteger(marker.heartbeatAtMs)&&marker.heartbeatAtMs>=0&&Number.isFinite(max)&&max>0&&age>=-5000&&age<=max;process.exit(live?0:1)}catch{process.exit(1)}",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    stop_grace_period: 2m
+    deploy:
+      replicas: 1
+    logging: *json-logging
+    mem_limit: 768m
+    mem_reservation: 128m
+    cpus: 1.00
+    pids_limit: 256
+
+  # Optional continuously scheduled, encrypted, off-host backup process.
+  backup:
+    <<: *db-ops-image
+    profiles: [backup]
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       db:
         condition: service_healthy
     environment:
-      NODE_ENV: production
-      DATABASE_URL: postgres://seatsniper:${POSTGRES_PASSWORD}@db:5432/seatsniper
-      TOKEN_SECRET: ${TOKEN_SECRET}
-      MAIL_TRANSPORT: ${MAIL_TRANSPORT:-noop}
-      MAIL_FROM: ${MAIL_FROM:-alerts@example.edu}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      SMTP_URL: ${SMTP_URL:-}
-      FETCH_USER_AGENT: ${FETCH_USER_AGENT:-BerkeleySeatSniper/0.2 (+mailto:ops@example.edu)}
-      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-120}
-      POLL_JITTER_SECONDS: ${POLL_JITTER_SECONDS:-20}
-      KILL_SWITCH: ${KILL_SWITCH:-0}
-      RESPECT_ROBOTS: ${RESPECT_ROBOTS:-1}
+      DATABASE_URL: postgres://seatsniper@db:5432/seatsniper
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      RESTIC_REPOSITORY: ${BACKUP_REPOSITORY:-}
+      RESTIC_PASSWORD: ${BACKUP_ENCRYPTION_PASSWORD:-}
+      RESTIC_COMPRESSION: max
+      AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${BACKUP_AWS_REGION:-}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-3600}
+      BACKUP_MAX_STALE_SECONDS: ${BACKUP_MAX_STALE_SECONDS:-5400}
+    command:
+      - sh
+      - -euc
+      - |
+        set -o pipefail
+        : "$${RESTIC_REPOSITORY:?set BACKUP_REPOSITORY}"
+        : "$${RESTIC_PASSWORD:?set BACKUP_ENCRYPTION_PASSWORD}"
+        case "$${BACKUP_INTERVAL_SECONDS}" in *[!0-9]*|'') exit 64;; esac
+        if ! restic snapshots >/dev/null 2>&1; then restic init; fi
+        cycles=0
+        while :; do
+          pg_dump --dbname "$${DATABASE_URL}" --format=custom --no-owner --no-privileges |
+            restic backup --stdin --stdin-filename seatsniper.dump --tag seat-sniper
+          completed_at="$$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          marker_tmp="/var/lib/seat-sniper-backup-status/.success.json.tmp"
+          umask 022
+          printf '{"completedAt":"%s"}\n' "$${completed_at}" > "$${marker_tmp}"
+          mv "$${marker_tmp}" /var/lib/seat-sniper-backup-status/success.json
+          cycles=$$((cycles + 1))
+          if [ $$((cycles % 24)) -eq 0 ]; then
+            restic forget --tag seat-sniper --keep-hourly 48 --keep-daily 14 \
+              --keep-weekly 8 --keep-monthly 12 --prune
+          fi
+          sleep "$${BACKUP_INTERVAL_SECONDS}"
+        done
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    volumes:
+      - backup_status:/var/lib/seat-sniper-backup-status
+    networks:
+      - data
+      - egress
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'last="$$(stat -c %Y /var/lib/seat-sniper-backup-status/success.json 2>/dev/null || echo 0)"; now="$$(date +%s)"; [ "$$last" -gt 0 ] && [ "$$((now - last))" -ge -5 ] && [ "$$((now - last))" -le "$${BACKUP_MAX_STALE_SECONDS}" ]',
+        ]
+      interval: 5m
+      timeout: 10s
+      retries: 3
+      start_period: 10m
+    stop_grace_period: 2m
+    logging: *json-logging
+    mem_limit: 512m
+    mem_reservation: 64m
+    cpus: 1.00
+    pids_limit: 192
+
+  # Ephemeral target used to prove that the newest off-host backup is restorable
+  # without touching production data.
+  restore-check-db:
+    image: postgres:16-alpine
+    profiles: [restore-check]
+    init: true
+    restart: 'no'
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_DB: seatsniper_restore_check
+      POSTGRES_USER: seatsniper
+      POSTGRES_PASSWORD: ${RESTORE_CHECK_PASSWORD:-restore-check-only}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /var/run/postgresql:rw,nosuid,nodev,size=16m
+      - /var/lib/postgresql/data:rw,nosuid,nodev,size=2g
+    networks:
+      - restore
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U seatsniper -d seatsniper_restore_check']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    logging: *json-logging
+    mem_limit: 1g
+    mem_reservation: 128m
+    cpus: 1.00
+    pids_limit: 256
+
+  restore-check:
+    <<: *db-ops-image
+    profiles: [restore-check]
+    init: true
+    restart: 'no'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      restore-check-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://seatsniper@restore-check-db:5432/seatsniper_restore_check
+      PGPASSWORD: ${RESTORE_CHECK_PASSWORD:-restore-check-only}
+      RESTIC_REPOSITORY: ${BACKUP_REPOSITORY:-}
+      RESTIC_PASSWORD: ${BACKUP_ENCRYPTION_PASSWORD:-}
+      RESTIC_COMPRESSION: max
+      AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${BACKUP_AWS_REGION:-}
+    command:
+      - sh
+      - -euc
+      - |
+        set -o pipefail
+        : "$${RESTIC_REPOSITORY:?set BACKUP_REPOSITORY}"
+        : "$${RESTIC_PASSWORD:?set BACKUP_ENCRYPTION_PASSWORD}"
+        restic dump latest seatsniper.dump |
+          pg_restore --dbname "$${DATABASE_URL}" --exit-on-error --no-owner --no-privileges
+        table_count="$$(psql "$${DATABASE_URL}" -Atc \
+          "select count(*) from information_schema.tables where table_schema = 'public'")"
+        [ "$${table_count}" -gt 0 ]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m
+    networks:
+      - restore
+      - egress
+    logging: *json-logging
+    mem_limit: 768m
+    mem_reservation: 64m
+    cpus: 1.00
+    pids_limit: 192
 
 volumes:
   db_data:
+  redis_data:
+  runtime_data:
+  backup_status:
+  caddy_data:
+  caddy_config:
+
+networks:
+  # Caddy and the API only; no service on this bridge publishes a port except Caddy.
+  edge:
+    driver: bridge
+  # Database/cache plane has no route off the Compose host.
+  data:
+    driver: bridge
+    internal: true
+  # Worker/backup outbound route; it publishes no inbound host port.
+  egress:
+    driver: bridge
+  # Isolated ephemeral restore drill database.
+  restore:
+    driver: bridge
+    internal: true

@@ -21,6 +21,7 @@ import type { ClassKey } from '../../src/shared/class-key';
 // ---------------------------------------------------------------------------
 
 const CK = '2026-fall-compsci-189-001-lec-001' as ClassKey;
+const REAL_TRANSPORT_TOKEN_SECRET = 'notifier-test-token-secret-at-least-32-characters';
 
 function makeEvent(overrides?: Partial<NotifyEvent>): NotifyEvent {
   return {
@@ -32,6 +33,19 @@ function makeEvent(overrides?: Partial<NotifyEvent>): NotifyEvent {
     openedAt: new Date().toISOString(),
     ...overrides,
   };
+}
+
+function createNotifierWithInjectedRealTransport(
+  options: Parameters<typeof createNotifier>[0],
+): ReturnType<typeof createNotifier> {
+  const previous = process.env.TOKEN_SECRET;
+  process.env.TOKEN_SECRET = REAL_TRANSPORT_TOKEN_SECRET;
+  try {
+    return createNotifier(options);
+  } finally {
+    if (previous === undefined) delete process.env.TOKEN_SECRET;
+    else process.env.TOKEN_SECRET = previous;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +220,7 @@ describe('alertOperator — parser-broke operator alert (FR-6, AC-5)', () => {
   it('alertOperator does not produce any subscriber-kind outbox entries (AC-5)', async () => {
     const notifier = createNotifier({ transport: createNoopTransport() });
     await notifier.alertOperator(CK, 'seat-count node not found');
-    const subscriberEntries = notifier.outbox.filter((e) => e.kind === 'subscriber');
+    const subscriberEntries = notifier.outbox.filter((e) => e.kind === 'alert');
     expect(subscriberEntries).toHaveLength(0);
   });
 
@@ -246,7 +260,7 @@ describe('outbox entry shape', () => {
     const event = makeEvent();
     await notifier.dispatch(event);
     const [entry] = notifier.outbox;
-    expect(entry.kind).toBe('subscriber');
+    expect(entry.kind).toBe('alert');
     expect(typeof entry.to).toBe('string');
     expect(typeof entry.subject).toBe('string');
     expect(typeof entry.body).toBe('string');
@@ -299,7 +313,7 @@ describe('dispatch — transport failure handling', () => {
         throw new Error('SMTP connection refused');
       },
     };
-    const notifier = createNotifier({ transport: failingTransport });
+    const notifier = createNotifierWithInjectedRealTransport({ transport: failingTransport });
     await expect(notifier.dispatch(makeEvent())).rejects.toThrow('SMTP connection refused');
   });
 
@@ -312,7 +326,7 @@ describe('dispatch — transport failure handling', () => {
         // Second call succeeds.
       },
     };
-    const notifier = createNotifier({ transport: flakyTransport });
+    const notifier = createNotifierWithInjectedRealTransport({ transport: flakyTransport });
     const event = makeEvent();
 
     // First attempt fails.

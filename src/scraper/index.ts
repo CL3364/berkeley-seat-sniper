@@ -7,6 +7,29 @@
  * src/shared/** (read-only to us too).
  */
 
-export { fetchClass, FetchError } from './fetch';
-export type { FetchOptions, FetchImpl } from './fetch';
-export { parseClassPage } from './parse';
+export {
+  fetchClass,
+  fetchClassObservation,
+  createPublicClassPageSource,
+  FetchError,
+  isSourceFetchingEnabled,
+  beginScrapeCycle,
+  endScrapeCycle,
+  __clearRobotsCacheForTests,
+} from './fetch';
+export type {
+  AvailabilityObservation,
+  AvailabilitySource,
+  AvailabilitySourceRequest,
+  FetchErrorKind,
+  FetchOptions,
+  FetchImpl,
+  OriginPermitContext,
+  OriginRequestStart,
+  OriginRequestKind,
+  RunWithOriginPermit,
+  SourceCacheMetadata,
+  SourceValidators,
+} from './fetch';
+export { parseClassPage, isNotFoundPage } from './parse';
+export type { ParseClassPageOptions, ScraperTelemetryEvent } from './parse';

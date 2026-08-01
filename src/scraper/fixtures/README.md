@@ -1,31 +1,83 @@
 # Scraper Fixtures
 
-These are SYNTHETIC HTML fixtures modeled on the Berkeley public class page structure
-(`classes.berkeley.edu/content/<classKey>`). They are used by the test-engineer to
-drive `parseClassPage` in unit tests without hitting the live site.
+These saved fixtures exercise Berkeley Seat Sniper without network access. The
+class-page fixtures are **sanitized, reduced reproductions of the public DOM
+shape verified on 2026-07-23** at `classes.berkeley.edu`; they are not complete
+copies of Berkeley pages and contain no user data. Counts and nonessential
+content are synthetic.
 
-**Important:** These fixtures were authored from documented page structure and visual
-inspection. They are NOT downloaded live HTML. Before relying on them for production
-confidence, validate the selectors against a real live sample from
-`https://classes.berkeley.edu/content/2026-fall-compsci-189-001-lec-001` (or any
-current term class). If selectors no longer match, update `parse.ts` and these
-fixtures together, and ensure `changed-shape.html` still triggers parser-broke.
+CI must use these files and injected `fetch` responses. A separately approved
+release canary validates the current live shape; it is never part of normal CI.
 
-## Files
+## Class-page files
 
-| File                 | Scenario                                                           |
-| -------------------- | ------------------------------------------------------------------ |
-| `zero-seats.html`    | 0 open seats, waitlist closed → status `closed`                    |
-| `open-seats.html`    | >0 open seats → status `open`                                      |
-| `waitlist-open.html` | 0 open seats, waitlist open → status `waitlist`                    |
-| `changed-shape.html` | Page whose enrollment nodes are absent → must yield `parser-broke` |
+| File                               | Expected behavior                                               |
+| ---------------------------------- | --------------------------------------------------------------- |
+| `zero-seats.html`                  | `0` open, full waitlist → `closed`                              |
+| `open-seats.html`                  | `3` open → `open`                                               |
+| `waitlist-open.html`               | `0` open, `39 < 40` waitlisted → `waitlist`                     |
+| `negative-seats.html`              | `-57` normalizes to `0` with telemetry                          |
+| `changed-shape.html`               | correct identity but missing enrollment region → `parser-broke` |
+| `duplicate-enrollment-fields.html` | duplicate required label → `parser-broke`                       |
+| `contradictory-waitlist.html`      | waitlisted count exceeds maximum → `parser-broke`               |
+| `identity-mismatch.html`           | canonical link identifies another section → `parser-broke`      |
+| `class-not-found.html`             | recognizable HTTP-200 soft 404 → `class-gone`                   |
 
-## Selectors relied on (see `parse.ts`)
+## Bound public-page shape
 
-The parser targets:
+`parseClassPage` requires exactly one:
 
-- `.enroll-numbers .available .count` — integer open seat count
-- `.waitlist-status` — present element containing text "open" when waitlist is open
+- `link[rel~=canonical]` whose HTTPS origin and `/content/<ClassKey>` path match
+  the requested class;
+- `section.current-enrollment` with a `Current Enrollment` heading;
+- `Total Open Seats`, `Waitlisted`, and `Waitlist Max` `<strong>` label inside
+  that region.
 
-When either required node is absent or the seat count is non-numeric, the parser
-returns `{ kind: 'parser-broke' }`. Update this list whenever selectors change.
+The values paired with those labels must be whole plain integers. Open seats may
+be signed; nonpositive values normalize to zero and negative values emit only a
+safe numeric telemetry event. Waitlisted and Waitlist Max must be nonnegative,
+and Waitlisted cannot exceed Waitlist Max. The waitlist is open exactly when its
+maximum is positive and its current count is below that maximum.
+
+Missing, duplicated, malformed, or contradictory values are always
+`parser-broke`. The parser never falls back to zero.
+
+## Soft 404s
+
+`fetchClassObservation` returns `class-gone` for HTTP 404 or a recognizable
+soft-not-found document. `isNotFoundPage` accepts a structural not-found marker
+or a matching title/top heading only when `section.current-enrollment` is
+absent. A live enrollment region therefore wins over stray “not found” prose.
+
+## robots.txt files
+
+| File                          | Expected behavior                         |
+| ----------------------------- | ----------------------------------------- |
+| `robots-allow-all.txt`        | permits the class path                    |
+| `robots-disallow-content.txt` | denies `/content/`                        |
+| `robots-comment-midgroup.txt` | comments do not end a group               |
+| `robots-multi-agent.txt`      | consecutive user-agent fields share rules |
+
+The implementation also tests status behavior through injected responses:
+
+- an explicit matching `Disallow` is a persistent `robots-disallow` safety stop;
+- 401/403 fail closed as persistent `source-forbidden` safety stops;
+- 404 and remaining RFC-unavailable 4xx responses mean no rules apply;
+- 429 fails closed as a persistent `source-rate-limited` safety stop and
+  preserves a bounded `Retry-After` value when supplied;
+- 5xx, network failure, invalid redirect, or unreadable body fail closed only
+  for the current cycle as transient failures;
+- `Allow`/`Disallow` use longest-match precedence, with Allow winning ties;
+- `*` and terminal `$` are matched by a bounded deterministic glob matcher,
+  never a regular expression built from source content.
+
+Both robots and class requests follow at most three redirects, only to the exact
+HTTPS `classes.berkeley.edu` origin. Response bodies and total request time are
+bounded across all redirect hops.
+
+## Cache-aware fetch contract
+
+Injected class responses may provide `Cache-Control`, `Age`, `ETag`, and
+`Last-Modified`. The scraper returns parsed freshness metadata and reuses
+conditional validators. A 304 produces `kind: 'not-modified'`, refreshes cache
+scheduling metadata, and deliberately does not produce a SeatState.

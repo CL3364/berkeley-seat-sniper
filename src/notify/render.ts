@@ -1,22 +1,59 @@
+import { classPageUrl } from '../shared/class-key';
 import type { NotifyEvent } from '../shared/seat-state';
 
 /**
- * Rendered email for a seat-open event. Subject and plain-text body only — no
- * HTML injection risk since we never interpolate raw page content (constitution:
- * treat fetched data as untrusted). Values come from the typed NotifyEvent, not
- * from any external string.
+ * Rendered email (subject + plain-text body). No HTML-injection risk: we never
+ * interpolate raw fetched page content (constitution: treat fetched data as
+ * untrusted). Values come from typed inputs (NotifyEvent / a token we minted),
+ * never from an external string.
+ *
+ * Link rendering (spec §4 pinned formats): confirmation and manage-link bodies
+ * render their absolute URL ON ITS OWN LINE so tests can extract it from the
+ * noop outbox with a simple regex.
  */
 export interface RenderedEmail {
   subject: string;
   body: string;
 }
 
-/** Render the subject and body for a subscriber seat-open notification. */
-export function renderSeatOpenEmail(event: NotifyEvent): RenderedEmail {
+/**
+ * Footer shared by every subscriber-facing email (manage link + service note).
+ * The manage URL is rendered ON ITS OWN LINE so tests can extract it by regex.
+ * When `manageUrl` is absent (no token supplied at fan-out), the footer omits
+ * the link line but still carries the service note.
+ */
+function subscriberFooter(manageUrl?: string): string[] {
+  return [
+    '---',
+    'You received this from Berkeley Seat Sniper because you confirmed an email',
+    'subscription to watch one or more classes. To view or remove your watches,',
+    'or to unsubscribe, open your manage page:',
+    ...(manageUrl ? [manageUrl] : []),
+    '',
+    'This is an automated notify-only service. It does not enroll you, and it',
+    'never asks for your CalNet login or password.',
+  ];
+}
+
+/**
+ * Render a subscriber seat-open / waitlist Alert (outbox kind `'alert'`).
+ *
+ * Includes the reserved-seat caveat (ADR 0006 accepted mitigation / audit M7):
+ * v1 cannot tell a General Seat from a Reserved Seat, so an open seat may not be
+ * enrollable by everyone — say so honestly.
+ *
+ * @param event     the typed opening to alert on.
+ * @param manageUrl the subscriber's manage link (`${APP_BASE_URL}/?token=...`),
+ *                  rendered in the footer so alert mail also carries the real
+ *                  double-opt-in manage/unsubscribe path (fixes audit N11 — no
+ *                  more reference to a non-existent "confirmation email" link).
+ *                  Optional: omitted when no manage token is supplied at
+ *                  fan-out (the alert still delivers, sans footer link).
+ */
+export function renderSeatOpenEmail(event: NotifyEvent, manageUrl?: string): RenderedEmail {
   const { classKey, openSeats, reason } = event;
 
   const reasonLabel = reason === 'seats-open' ? 'open seats' : 'waitlist movement';
-
   const subject = `Seat alert: ${classKey} has ${reasonLabel}`;
 
   const body = [
@@ -26,15 +63,71 @@ export function renderSeatOpenEmail(event: NotifyEvent): RenderedEmail {
       ? `Open seats: ${openSeats}`
       : `Waitlist movement detected (open seats: ${openSeats})`,
     '',
-    `Check the class page now:`,
-    `https://classes.berkeley.edu/content/${classKey}`,
+    'Check the class page now:',
+    classPageUrl(classKey),
     '',
-    '---',
-    'You received this alert from Berkeley Seat Sniper because you are watching',
-    `the class above. To manage your watches or unsubscribe, use the link that`,
-    'was included in your original subscription confirmation email.',
+    'Note: some seats are reserved for specific student groups (a major, a class',
+    'standing, first-years, transfers, and so on) and may not be enrollable for',
+    'everyone, even when they show as open. We alert on every open seat and cannot',
+    'yet tell which are reserved, so confirm your eligibility on the page above.',
     '',
-    'This is an automated notify-only service. It does not enroll you.',
+    ...subscriberFooter(manageUrl),
+  ].join('\n');
+
+  return { subject, body };
+}
+
+/**
+ * Render the CONFIRMATION email (outbox kind `'confirmation'`). Carries the
+ * confirm link `${APP_BASE_URL}/?confirm=<token>` on its own line. Sent on
+ * subscribe and on resend-while-Pending. Double opt-in: only after the
+ * subscriber follows this link and confirms do they become eligible for Alerts.
+ *
+ * @param confirmUrl absolute confirm link, already built (`?confirm=<token>`).
+ */
+export function renderConfirmationEmail(confirmUrl: string): RenderedEmail {
+  const subject = 'Confirm your Berkeley Seat Sniper subscription';
+
+  const body = [
+    'Almost there — confirm to start watching.',
+    '',
+    'Someone (hopefully you) asked Berkeley Seat Sniper to alert this address when',
+    'a watched class opens up. To start receiving alerts, confirm your subscription:',
+    confirmUrl,
+    '',
+    'You will not receive any seat alerts until you confirm. If you did not request',
+    'this, you can ignore this email and nothing further will be sent.',
+    '',
+    'This is an automated notify-only service. It does not enroll you, and it never',
+    'asks for your CalNet login or password.',
+  ].join('\n');
+
+  return { subject, body };
+}
+
+/**
+ * Render the MANAGE-LINK email (outbox kind `'manage-link'`). Carries the manage
+ * link `${APP_BASE_URL}/?token=<token>` on its own line. Sent on
+ * resend-while-Confirmed (the non-enumerating "email me my manage link" flow).
+ *
+ * @param manageUrl absolute manage link (`?token=<token>`).
+ */
+export function renderManageLinkEmail(manageUrl: string): RenderedEmail {
+  const subject = 'Your Berkeley Seat Sniper manage link';
+
+  const body = [
+    'Here is your manage link.',
+    '',
+    'Use the link below to view, add, or remove the classes you are watching, to',
+    'turn browser push on or off, or to unsubscribe. It is the only way in — there',
+    'is no password and no account.',
+    manageUrl,
+    '',
+    'If you did not request this link, you can ignore this email; it grants access',
+    'only to the inbox it was sent to.',
+    '',
+    'This is an automated notify-only service. It does not enroll you, and it never',
+    'asks for your CalNet login or password.',
   ].join('\n');
 
   return { subject, body };
@@ -51,6 +144,51 @@ export function renderOperatorAlert(classKey: string, detail: string): RenderedE
       '',
       'No subscriber notifications were sent for this cycle.',
       'Investigate and update the scraper if the upstream HTML changed.',
+    ].join('\n'),
+  };
+}
+
+/**
+ * Render a generic durable Operator job. Parser incidents retain the established
+ * class-specific template; queue/provider incidents without a class use a
+ * neutral service-alert template.
+ */
+export function renderOperatorEmail(classKey: string | null, detail: string): RenderedEmail {
+  if (classKey) return renderOperatorAlert(classKey, detail);
+  return {
+    subject: '[OPERATOR] Berkeley Seat Sniper service alert',
+    body: [
+      'Berkeley Seat Sniper requires operator attention.',
+      '',
+      `Detail: ${detail}`,
+      '',
+      'Review worker health, the durable mail outbox, and provider status.',
+    ].join('\n'),
+  };
+}
+
+/** Render the out-of-band, recursion-safe dead-letter incident notification. */
+export function renderDeadLetterIncident(input: {
+  incidentId: string;
+  mailJobId: string;
+  mailKind: string;
+  terminalReason: string;
+  lastErrorCode: string;
+  openedAt: Date;
+}): RenderedEmail {
+  return {
+    subject: `[OPERATOR] dead-letter incident ${input.incidentId}`,
+    body: [
+      'Berkeley Seat Sniper has an unresolved dead-letter incident.',
+      '',
+      `Incident id: ${input.incidentId}`,
+      `Mail job id: ${input.mailJobId}`,
+      `Mail kind: ${input.mailKind}`,
+      `Terminal reason: ${input.terminalReason}`,
+      `Last error code: ${input.lastErrorCode}`,
+      `Opened at: ${input.openedAt.toISOString()}`,
+      '',
+      'Acknowledge or resolve the incident with the authenticated operator tooling.',
     ].join('\n'),
   };
 }

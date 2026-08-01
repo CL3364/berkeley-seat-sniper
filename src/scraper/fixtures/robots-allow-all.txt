@@ -1,0 +1,6 @@
+# Synthetic fixture: robots.txt that allows crawling everything.
+# Modeled on the verified-permitted Berkeley posture (ADR 0002, 2026-06-09).
+# Used to drive the RFC 9309 robots check in tests without a live fetch.
+# Expected effect: the class content path is ALLOWED → fetchClass proceeds.
+User-agent: *
+Allow: /

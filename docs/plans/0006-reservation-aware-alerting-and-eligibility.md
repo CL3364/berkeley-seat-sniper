@@ -1,6 +1,6 @@
 # Plan 0006 — Reservation-aware alerting + Subscriber eligibility
 
-Status: Planned (not started) — depends on Plan 0001 (SIS API source)
+Status: Blocked pending a new data-source/product design; do not assume Plan 0001 access
 Decision: [ADR 0006](../adr/0006-reserved-seats-v1-is-blind-eligibility-deferred.md)
 
 ## Goal

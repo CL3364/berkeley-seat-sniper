@@ -4,11 +4,13 @@
  * role except the architect. Framework-agnostic: only `zod` is imported here.
  *
  * Modules:
+ *  - `email`      Generic and exact-`@berkeley.edu` subscriber email schemas.
  *  - `class-key`  ClassKey brand, canonical form, normalizeClassKey, schemas.
  *  - `seat-state` SeatState/SeatStatus, ParseResult union, NotifyEvent, Subscriber.
  *  - `errors`     ApiError code union + envelope + helpers.
  *  - `api`        per-endpoint request/param/response schemas + route table.
  */
+export * from './email';
 export * from './class-key';
 export * from './seat-state';
 export * from './errors';

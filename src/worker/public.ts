@@ -10,9 +10,68 @@
  *   - createWorkerRepo — wire a real WorkerRepo from makeTestDb()
  */
 
-export { runPollCycle, startPoller } from './poller';
-export type { PollCycleDeps, Logger } from './poller';
+export { inspectWorkerSourceDisabled, runPollCycle, startPoller } from './poller';
+export type { Logger, PollCycleDeps, StartPollerOptions, WorkerHealthSnapshot } from './poller';
 
-export type { WorkerRepo, CycleSummary } from './types';
+export type { CycleSummary, DurableWorkerRepo, RuntimeWorkerRepo, WorkerRepo } from './types';
 
 export { createWorkerRepo } from './repo';
+
+export {
+  createFileSourceOriginControl,
+  createMemorySourceOriginControl,
+  defaultSourceOriginStateFile,
+  sourceOriginFenceFile,
+} from './source-origin-control';
+export type {
+  FileSourceOriginControlOptions,
+  SourceOriginBlockClassification,
+  SourceOriginControl,
+  SourceOriginControlState,
+  SourceOriginDeferResult,
+  SourceOriginFence,
+  SourceOriginFenceResult,
+  SourceOriginPermitOptions,
+  SourceOriginStartResult,
+} from './source-origin-control';
+
+export {
+  SOURCE_SAFETY_STOP_RESET_CONFIRMATION,
+  SourceSafetyStopResetDeferredError,
+  createFileSourceSafetyStopStore,
+  createMemorySourceSafetyStopStore,
+  defaultSourceSafetyStopFile,
+  resetSourceSafetyStop,
+  sourceSafetyStopCliResetRejection,
+} from './source-safety-stop';
+export type {
+  FileSourceSafetyStopStoreOptions,
+  SourceSafetyStopCliResetRejection,
+  SourceSafetyStopClassification,
+  SourceSafetyStopEngageOptions,
+  SourceSafetyStopReason,
+  SourceSafetyStopState,
+  SourceSafetyStopStore,
+} from './source-safety-stop';
+
+export {
+  SourceScheduleState,
+  abortableSleep,
+  createMaintenanceState,
+  drainMailOutboxOnce,
+  readV04WorkerConfig,
+  runOutboxDispatchCycle,
+  runCacheAwarePollCycle,
+  runSourcePollCycle,
+} from './v04';
+export type {
+  CacheAwarePollCycleDeps,
+  DrainMailOutboxOnceOptions,
+  MaintenanceState,
+  OutboxDrainSummary,
+  OutboxDispatchCycleDeps,
+  OutboxDispatchCycleSummary,
+  SourceScheduleHealth,
+  V04Logger,
+  V04WorkerConfig,
+} from './v04';

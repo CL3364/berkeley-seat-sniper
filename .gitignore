@@ -29,8 +29,31 @@ data/
 
 # editor / OS
 .DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
 *.log
+
+# local artifact directories
+/logs/
+/temp/
+/output/
+
+# local peer-review state and unreferenced screenshots
+.duet/
+/seat-sniper-home.png
+/seat-sniper-confirm.png
 
 # team-runtime transients (hook bookkeeping / acceptance flag)
 .claude/.idle-nudge-count
 .claude/acceptance.passed
+
+# local-only operator tooling (owner decision 2026-06-09: keep untracked)
+scripts/wipe-subscriber-emails.ts

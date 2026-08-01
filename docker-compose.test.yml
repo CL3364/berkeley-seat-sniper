@@ -1,0 +1,19 @@
+# Explicit non-production override for CI/local topology verification.
+#
+# The base Compose model is production-only: it pins real Resend mail and the
+# API requires a fresh off-host backup marker. This override is deliberately
+# opt-in and changes both application roles to NODE_ENV=test + noop mail so
+# fixture-driven smoke tests cannot contact a provider. It also omits the
+# production backup-readiness mount from API configuration.
+
+services:
+  app:
+    environment:
+      NODE_ENV: test
+      MAIL_TRANSPORT: noop
+      BACKUP_SUCCESS_MARKER_FILE: ''
+
+  worker:
+    environment:
+      NODE_ENV: test
+      MAIL_TRANSPORT: noop

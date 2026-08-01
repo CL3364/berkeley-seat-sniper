@@ -6,7 +6,7 @@
  *   - makeRepo(db) — to seed subscribers via the API-compatible repo
  *   - runPollCycle(deps) — the worker's testable core (no scheduler, no ports)
  *   - fake fetchClass — returns parseClassPage(fixture, classKey) so no network
- *   - createNotifier({ transport: createNoopTransport() }) — noop outbox
+ *   - makeNotifier(db) — noop outbox
  *
  * PII rule: tests must not log subscriber emails. We inject a silent logger.
  *
@@ -21,7 +21,8 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { makeTestDb, makeRepo } from '../../src/db';
+import { makeTestDb, makeRepo, confirmSubscriber, isSuppressed } from '../../src/db';
+import type { Db } from '../../src/db';
 import { createWorkerRepo } from '../../src/worker/repo';
 import { createNotifier } from '../../src/notify/index';
 import { createNoopTransport } from '../../src/notify/transports/noop';
@@ -48,6 +49,14 @@ function loadFixture(name: string): string {
   return readFileSync(FIXTURE_DIR + name, 'utf-8');
 }
 
+/** Rebind a saved page's canonical identity to the requested test Section. */
+function withFixtureIdentity(html: string, classKey: ClassKey): string {
+  return html.replace(
+    /(href=["']https:\/\/classes\.berkeley\.edu\/content\/)[^"'?#\s]+/i,
+    `$1${classKey}`,
+  );
+}
+
 /** A silent logger — keeps test output clean; tests assert on outbox, not logs. */
 const silentLogger: Logger = {
   info: () => undefined,
@@ -57,18 +66,46 @@ const silentLogger: Logger = {
 
 /** Build a fake fetchClass that always returns parseClassPage(html, classKey). */
 function fakeFetch(html: string): (classKey: ClassKey) => Promise<ParseResult> {
-  return async (classKey) => parseClassPage(html, classKey);
+  return async (classKey) => parseClassPage(withFixtureIdentity(html, classKey), classKey);
 }
 
-/** Seed one subscriber watching CK into the db. Returns the subscriber id. */
+/** Keep notifier suppression reads on the same isolated database as the worker. */
+function makeNotifier(db: Db): ReturnType<typeof createNotifier> {
+  return createNotifier({
+    transport: createNoopTransport(),
+    isSuppressed: (email) => isSuppressed(db, email),
+  });
+}
+
+/**
+ * Seed one CONFIRMED subscriber watching CK into the db. Returns the id.
+ *
+ * The worker fans out only to CONFIRMED subscribers (FR-9 / AC-3 / AC-9), so the
+ * seed MUST confirm — without confirmSubscriber, getSubscribersWatching returns 0
+ * and every alert assertion fails with "got 0".
+ */
 async function seedSubscriber(
+  db: Db,
   repo: ReturnType<typeof makeRepo>,
   email = VALID_EMAIL,
   classKey: ClassKey = CK,
 ): Promise<string> {
   const result = await repo.createSubscriber(email, [classKey]);
+  await confirmSubscriber(db, result.id);
   return result.id;
 }
+
+let originalKillSwitch: string | undefined;
+
+beforeEach(() => {
+  originalKillSwitch = process.env.KILL_SWITCH;
+  process.env.KILL_SWITCH = '0';
+});
+
+afterEach(() => {
+  if (originalKillSwitch === undefined) delete process.env.KILL_SWITCH;
+  else process.env.KILL_SWITCH = originalKillSwitch;
+});
 
 // ---------------------------------------------------------------------------
 // AC-3: 0→>0 transition → exactly one notification per subscriber via outbox
@@ -84,10 +121,13 @@ describe('AC-3: seat transition 0→>0 notifies each subscriber exactly once', (
     const db = await makeTestDb();
     const apiRepo = makeRepo(db);
     const workerRepo = createWorkerRepo(db);
-    notifier = createNotifier({ transport: createNoopTransport() });
+    notifier = createNotifier({
+      transport: createNoopTransport(),
+      isSuppressed: (email) => isSuppressed(db, email),
+    });
 
     // Seed one subscriber watching CK.
-    await seedSubscriber(apiRepo);
+    await seedSubscriber(db, apiRepo);
 
     // Default fetchClass satisfies the required PollCycleDeps field; every test
     // overrides `deps.fetchClass` before calling runPollCycle.
@@ -119,7 +159,7 @@ describe('AC-3: seat transition 0→>0 notifies each subscriber exactly once', (
     deps.fetchClass = fakeFetch(loadFixture('open-seats.html'));
     await runPollCycle(deps);
 
-    const subscriberEntries = notifier.outbox.filter((e) => e.kind === 'subscriber');
+    const subscriberEntries = notifier.outbox.filter((e) => e.kind === 'alert');
     expect(subscriberEntries).toHaveLength(1);
   });
 
@@ -130,7 +170,7 @@ describe('AC-3: seat transition 0→>0 notifies each subscriber exactly once', (
     deps.fetchClass = fakeFetch(loadFixture('open-seats.html'));
     await runPollCycle(deps);
 
-    const [entry] = notifier.outbox.filter((e) => e.kind === 'subscriber');
+    const [entry] = notifier.outbox.filter((e) => e.kind === 'alert');
     expect(entry.to).toBe(VALID_EMAIL);
   });
 
@@ -138,10 +178,13 @@ describe('AC-3: seat transition 0→>0 notifies each subscriber exactly once', (
     const db = await makeTestDb();
     const apiRepo = makeRepo(db);
     const workerRepo = createWorkerRepo(db);
-    const localNotifier = createNotifier({ transport: createNoopTransport() });
+    const localNotifier = createNotifier({
+      transport: createNoopTransport(),
+      isSuppressed: (email) => isSuppressed(db, email),
+    });
 
-    await seedSubscriber(apiRepo, 'a@berkeley.edu');
-    await seedSubscriber(apiRepo, 'b@berkeley.edu');
+    await seedSubscriber(db, apiRepo, 'a@berkeley.edu');
+    await seedSubscriber(db, apiRepo, 'b@berkeley.edu');
 
     const localDeps: PollCycleDeps = {
       repo: workerRepo,
@@ -157,7 +200,7 @@ describe('AC-3: seat transition 0→>0 notifies each subscriber exactly once', (
     localDeps.fetchClass = fakeFetch(loadFixture('open-seats.html'));
     await runPollCycle(localDeps);
 
-    const subscriberEntries = localNotifier.outbox.filter((e) => e.kind === 'subscriber');
+    const subscriberEntries = localNotifier.outbox.filter((e) => e.kind === 'alert');
     // Each of the two subscribers receives exactly one notification.
     expect(subscriberEntries).toHaveLength(2);
 
@@ -193,9 +236,9 @@ describe('AC-4: second poll with seats still open → no additional notification
     const db = await makeTestDb();
     const apiRepo = makeRepo(db);
     const workerRepo = createWorkerRepo(db);
-    notifier = createNotifier({ transport: createNoopTransport() });
+    notifier = makeNotifier(db);
 
-    await seedSubscriber(apiRepo);
+    await seedSubscriber(db, apiRepo);
 
     // Default fetchClass satisfies the required PollCycleDeps field; every test
     // overrides `deps.fetchClass` before calling runPollCycle.
@@ -219,11 +262,11 @@ describe('AC-4: second poll with seats still open → no additional notification
     // First opening poll — notifies.
     deps.fetchClass = fakeFetch(loadFixture('open-seats.html'));
     await runPollCycle(deps);
-    expect(notifier.outbox.filter((e) => e.kind === 'subscriber')).toHaveLength(1);
+    expect(notifier.outbox.filter((e) => e.kind === 'alert')).toHaveLength(1);
 
     // Second poll — seats still open, no new notification.
     await runPollCycle(deps);
-    expect(notifier.outbox.filter((e) => e.kind === 'subscriber')).toHaveLength(1);
+    expect(notifier.outbox.filter((e) => e.kind === 'alert')).toHaveLength(1);
   });
 
   it('CycleSummary.notified is 0 on the third (still-open) poll', async () => {
@@ -246,19 +289,19 @@ describe('AC-4: second poll with seats still open → no additional notification
     // Opening → 1 notification.
     deps.fetchClass = fakeFetch(loadFixture('open-seats.html'));
     await runPollCycle(deps);
-    expect(notifier.outbox.filter((e) => e.kind === 'subscriber')).toHaveLength(1);
+    expect(notifier.outbox.filter((e) => e.kind === 'alert')).toHaveLength(1);
 
     // Seat closes again.
     deps.fetchClass = fakeFetch(loadFixture('zero-seats.html'));
     await runPollCycle(deps);
-    expect(notifier.outbox.filter((e) => e.kind === 'subscriber')).toHaveLength(1);
+    expect(notifier.outbox.filter((e) => e.kind === 'alert')).toHaveLength(1);
 
     // Seat reopens → a second notification is legitimate (new openedAt → new key).
     deps.fetchClass = fakeFetch(loadFixture('open-seats.html'));
     // Advance now() so openedAt differs from the first opening.
     deps.now = () => new Date(Date.now() + 60_000).toISOString();
     await runPollCycle(deps);
-    expect(notifier.outbox.filter((e) => e.kind === 'subscriber')).toHaveLength(2);
+    expect(notifier.outbox.filter((e) => e.kind === 'alert')).toHaveLength(2);
   });
 });
 
@@ -278,9 +321,9 @@ describe('AC-5: parser-broke → operator alert, zero subscriber notifications, 
     const db = await makeTestDb();
     const apiRepo = makeRepo(db);
     workerRepo = createWorkerRepo(db);
-    notifier = createNotifier({ transport: createNoopTransport() });
+    notifier = makeNotifier(db);
 
-    await seedSubscriber(apiRepo);
+    await seedSubscriber(db, apiRepo);
 
     // Default fetchClass satisfies the required PollCycleDeps field; every test
     // overrides `deps.fetchClass` before calling runPollCycle.
@@ -306,7 +349,7 @@ describe('AC-5: parser-broke → operator alert, zero subscriber notifications, 
     await runPollCycle(deps);
 
     const operatorEntries = notifier.outbox.filter((e) => e.kind === 'operator');
-    const subscriberEntries = notifier.outbox.filter((e) => e.kind === 'subscriber');
+    const subscriberEntries = notifier.outbox.filter((e) => e.kind === 'alert');
 
     expect(operatorEntries).toHaveLength(1);
     expect(subscriberEntries).toHaveLength(0);
@@ -357,16 +400,16 @@ describe('AC-5: parser-broke → operator alert, zero subscriber notifications, 
     deps.fetchClass = fakeFetch(loadFixture('open-seats.html'));
     await runPollCycle(deps);
 
-    const subscriberEntries = notifier.outbox.filter((e) => e.kind === 'subscriber');
+    const subscriberEntries = notifier.outbox.filter((e) => e.kind === 'alert');
     expect(subscriberEntries).toHaveLength(1);
   });
 });
 
 // ---------------------------------------------------------------------------
-// AC-6: KILL_SWITCH=1 → poll cycle performs no outbound fetch
+// AC-6: only exact KILL_SWITCH=0 permits source polling
 // ---------------------------------------------------------------------------
 
-describe('AC-6: KILL_SWITCH=1 → runPollCycle fetches nothing and returns zero summary', () => {
+describe('AC-6: source polling requires exact KILL_SWITCH=0', () => {
   afterEach(() => {
     delete process.env.KILL_SWITCH;
     delete process.env.TOKEN_SECRET;
@@ -379,7 +422,7 @@ describe('AC-6: KILL_SWITCH=1 → runPollCycle fetches nothing and returns zero 
 
     const db = await makeTestDb();
     const workerRepo = createWorkerRepo(db);
-    const notifier = createNotifier({ transport: createNoopTransport() });
+    const notifier = makeNotifier(db);
 
     const fetchSpy = vi.fn();
     const summary = await runPollCycle({
@@ -394,28 +437,39 @@ describe('AC-6: KILL_SWITCH=1 → runPollCycle fetches nothing and returns zero 
     expect(summary.parserBroke).toHaveLength(0);
   });
 
-  it('fetchClass is NEVER called when KILL_SWITCH=1 (AC-6 core assertion)', async () => {
-    process.env.KILL_SWITCH = '1';
-    process.env.TOKEN_SECRET = 'test-secret-for-integration-tests-minimum-32-chars';
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['disabled', '1'],
+    ['boolean-like', 'true'],
+    ['multi-character numeric', '11'],
+    ['whitespace-padded zero', ' 0 '],
+  ])(
+    'fetchClass is NEVER called when KILL_SWITCH is %s (AC-6 core assertion)',
+    async (_case, value) => {
+      if (value === undefined) delete process.env.KILL_SWITCH;
+      else process.env.KILL_SWITCH = value;
+      process.env.TOKEN_SECRET = 'test-secret-for-integration-tests-minimum-32-chars';
 
-    const db = await makeTestDb();
-    const apiRepo = makeRepo(db);
-    const workerRepo = createWorkerRepo(db);
-    const notifier = createNotifier({ transport: createNoopTransport() });
+      const db = await makeTestDb();
+      const apiRepo = makeRepo(db);
+      const workerRepo = createWorkerRepo(db);
+      const notifier = makeNotifier(db);
 
-    // Even with a subscriber watching CK, the fetch must not happen.
-    await seedSubscriber(apiRepo);
+      // Even with a subscriber watching CK, the fetch must not happen.
+      await seedSubscriber(db, apiRepo);
 
-    const fetchSpy = vi.fn();
-    await runPollCycle({
-      repo: workerRepo,
-      fetchClass: fetchSpy,
-      notifier,
-      logger: silentLogger,
-    });
+      const fetchSpy = vi.fn();
+      await runPollCycle({
+        repo: workerRepo,
+        fetchClass: fetchSpy,
+        notifier,
+        logger: silentLogger,
+      });
 
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it('the noop outbox stays empty when KILL_SWITCH=1', async () => {
     process.env.KILL_SWITCH = '1';
@@ -424,9 +478,9 @@ describe('AC-6: KILL_SWITCH=1 → runPollCycle fetches nothing and returns zero 
     const db = await makeTestDb();
     const apiRepo = makeRepo(db);
     const workerRepo = createWorkerRepo(db);
-    const notifier = createNotifier({ transport: createNoopTransport() });
+    const notifier = makeNotifier(db);
 
-    await seedSubscriber(apiRepo);
+    await seedSubscriber(db, apiRepo);
 
     await runPollCycle({
       repo: workerRepo,
@@ -438,16 +492,16 @@ describe('AC-6: KILL_SWITCH=1 → runPollCycle fetches nothing and returns zero 
     expect(notifier.outbox).toHaveLength(0);
   });
 
-  it('runPollCycle without KILL_SWITCH does call fetchClass (guard against false-green)', async () => {
-    delete process.env.KILL_SWITCH;
+  it('runPollCycle with exact KILL_SWITCH=0 does call fetchClass (guard against false-green)', async () => {
+    process.env.KILL_SWITCH = '0';
     process.env.TOKEN_SECRET = 'test-secret-for-integration-tests-minimum-32-chars';
 
     const db = await makeTestDb();
     const apiRepo = makeRepo(db);
     const workerRepo = createWorkerRepo(db);
-    const notifier = createNotifier({ transport: createNoopTransport() });
+    const notifier = makeNotifier(db);
 
-    await seedSubscriber(apiRepo);
+    await seedSubscriber(db, apiRepo);
 
     const fetchSpy = vi.fn().mockResolvedValue(parseClassPage(loadFixture('zero-seats.html'), CK));
 
@@ -479,9 +533,9 @@ describe('AC-8: worker cycle logs contain no subscriber email', () => {
     const db = await makeTestDb();
     const apiRepo = makeRepo(db);
     const workerRepo = createWorkerRepo(db);
-    const notifier = createNotifier({ transport: createNoopTransport() });
+    const notifier = makeNotifier(db);
 
-    await seedSubscriber(apiRepo, VALID_EMAIL);
+    await seedSubscriber(db, apiRepo, VALID_EMAIL);
 
     // Capture all log output via the real default logger path — inject a spy logger.
     const loggedLines: string[] = [];
@@ -523,7 +577,7 @@ describe('runPollCycle — no watched classes → empty cycle', () => {
 
     const db = await makeTestDb();
     const workerRepo = createWorkerRepo(db);
-    const notifier = createNotifier({ transport: createNoopTransport() });
+    const notifier = makeNotifier(db);
     const fetchSpy = vi.fn();
 
     const summary = await runPollCycle({
@@ -544,12 +598,12 @@ describe('runPollCycle — no watched classes → empty cycle', () => {
     const db = await makeTestDb();
     const apiRepo = makeRepo(db);
     const workerRepo = createWorkerRepo(db);
-    const notifier = createNotifier({ transport: createNoopTransport() });
+    const notifier = makeNotifier(db);
 
     // Three subscribers all watching the SAME class.
-    await seedSubscriber(apiRepo, 'a@berkeley.edu');
-    await seedSubscriber(apiRepo, 'b@berkeley.edu');
-    await seedSubscriber(apiRepo, 'c@berkeley.edu');
+    await seedSubscriber(db, apiRepo, 'a@berkeley.edu');
+    await seedSubscriber(db, apiRepo, 'b@berkeley.edu');
+    await seedSubscriber(db, apiRepo, 'c@berkeley.edu');
 
     const fetchSpy = vi.fn().mockResolvedValue(parseClassPage(loadFixture('zero-seats.html'), CK));
 
