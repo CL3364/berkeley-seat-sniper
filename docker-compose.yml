@@ -38,6 +38,16 @@ services:
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]
+    # The caddy binary ships with the file capability cap_net_bind_service=+ep.
+    # Under `no-new-privileges` with an EMPTY capability bounding set, exec'ing a
+    # file that carries capabilities fails outright — the container dies with
+    # "[FATAL tini] exec caddy failed: Operation not permitted" and restart-loops,
+    # taking the whole topology down. Granting back exactly that one capability is
+    # the narrow fix; dropping `no-new-privileges` instead would weaken the
+    # container far more broadly.
+    # This is about EXEC, not binding: Caddy listens on 8080/8443 INSIDE the
+    # container (see the port mappings below) and never binds a privileged port.
+    cap_add: [NET_BIND_SERVICE]
     security_opt:
       - no-new-privileges:true
     depends_on:
