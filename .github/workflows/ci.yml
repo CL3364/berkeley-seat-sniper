@@ -251,15 +251,27 @@ jobs:
           test "$(docker inspect "$app_container" --format '{{range .Mounts}}{{if eq .Destination "/app/runtime"}}{{.RW}}{{end}}{{end}}')" = false
           test "$(docker inspect "$worker_container" --format '{{range .Mounts}}{{if eq .Destination "/app/runtime"}}{{.RW}}{{end}}{{end}}')" = true
           echo 'verify private services publish no host ports'
-          test -z "$(docker compose port app 8787 2>/dev/null || true)"
-          test -z "$(docker compose port db 5432 2>/dev/null || true)"
-          test -z "$(docker compose port redis 6379 2>/dev/null || true)"
-          echo 'verify Caddy is the only service publishing host ports'
-          published="$(
+          published_host_ports="$(
             docker compose ps --format json |
-              jq -r '.Service as $service | .Publishers[]? | select(.PublishedPort > 0) | $service' |
-              sort -u
+              jq -sc '[
+                .[]
+                | if type == "array" then .[] else . end
+                | .Service as $service
+                | .Publishers[]?
+                | select(.PublishedPort > 0)
+                | {service: $service, target: .TargetPort, published: .PublishedPort}
+              ]'
           )"
+          printf 'published host ports: %s\n' "$published_host_ports"
+          jq -e '
+            [.[] | select(
+              (.service == "app" and .target == 8787) or
+              (.service == "db" and .target == 5432) or
+              (.service == "redis" and .target == 6379)
+            )] | length == 0
+          ' <<<"$published_host_ports" >/dev/null
+          echo 'verify Caddy is the only service publishing host ports'
+          published="$(jq -r '.[].service' <<<"$published_host_ports" | sort -u)"
           test "$published" = caddy
 
       - name: collect compose diagnostics
