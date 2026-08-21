@@ -19,6 +19,28 @@ existing token-scoped management.
 See [`specs/spec.md`](specs/spec.md) for the living spec and [`constitution.md`](constitution.md)
 for project law. The API contract in [`src/shared`](src/shared) is the single source of truth.
 
+## The watch dashboard
+
+![The manage view: four watched classes as clickable boxes, each showing open seats out of
+total, open waitlist spots out of total, how fresh the reading is, and a link to the official
+Berkeley page](docs/dashboard.png)
+
+A Subscriber watches at most **four** classes at a time and frees a slot deliberately, so the
+page leads with where they stand ("Using 4 of 4 slots").
+
+Three details in that screenshot are load-bearing:
+
+- **`0 of 100` open waitlist spots, not `100 of 100`.** Berkeley publishes `Waitlisted` as the
+  number of students already queued, so rendering it directly would advertise a _full_ waitlist
+  as wide open. Open spots are `waitlistMax - waitlisted`, and the separately-stored
+  `waitlistOpen` flag — the one alerting derives from — overrides the arithmetic when they
+  disagree.
+- **Dashes, never zeros, for a class that has not been polled yet.** A `0` is a claim about the
+  world; a dash is an admission that no reading exists. The box also falls back to the class key
+  when the page heading has not been read.
+- **Every box states its own freshness.** These pages are cached, so a seat count without an
+  observation age invites a student to trust a number the poller has not refreshed.
+
 ## Stack
 
 - **Frontend:** Vite + React + TypeScript (`src/client`, `src/components`)

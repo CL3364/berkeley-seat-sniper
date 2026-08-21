@@ -81,6 +81,25 @@ export function getDb(): Db {
       idle_in_transaction_session_timeout: queryTimeoutMillis,
       application_name: 'berkeley-seat-sniper',
     });
+    // A `pg` Pool emits 'error' when an IDLE client dies — a PostgreSQL restart,
+    // an administrator `pg_terminate_backend`, a `drop database ... with (force)`,
+    // or a network drop. Node treats an unhandled 'error' event as fatal, so
+    // WITHOUT this listener a routine database restart takes the API or worker
+    // process down instead of letting the pool reap the dead client and reconnect.
+    //
+    // The listener is deliberately minimal: the pool already discards the errored
+    // client, and the next checkout opens a fresh connection. Log only the errno-ish
+    // shape — never the connection string, which carries the password (§6 PII/secret
+    // handling).
+    pool.on('error', (error: Error & { code?: string }) => {
+      console.error(
+        JSON.stringify({
+          event: 'db_pool_idle_client_error',
+          code: error.code ?? null,
+          name: error.name,
+        }),
+      );
+    });
     _runtimePool = pool;
     _db = drizzlePg(pool, { schema });
     _runtimePgConfig = {

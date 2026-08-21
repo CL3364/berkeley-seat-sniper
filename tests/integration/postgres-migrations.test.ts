@@ -41,6 +41,14 @@ async function isolatedPostgres(): Promise<IsolatedPostgres> {
   if (!testDatabaseUrl) throw new Error('TEST_DATABASE_URL is required');
   const databaseName = `seat_sniper_it_${randomUUID().replaceAll('-', '')}`;
   const admin = new Pool({ connectionString: testDatabaseUrl });
+  // This helper deliberately destroys its own connections: the lease-failover case
+  // calls pg_terminate_backend, and close() runs `drop database ... with (force)`,
+  // which terminates every remaining backend on the isolated database. Each of those
+  // makes `pg` emit 'error' on the owning client, and an unhandled 'error' event is
+  // fatal in Node — that is what turned 6 PASSING tests into a red CI run
+  // ("Vitest caught 5 unhandled errors"). Swallow the expected teardown errors here;
+  // the assertions, not these events, decide whether the tests pass.
+  admin.on('error', () => {});
   await admin.query(`create database "${databaseName}"`);
   const isolatedUrl = new URL(testDatabaseUrl);
   isolatedUrl.pathname = `/${databaseName}`;
@@ -48,6 +56,7 @@ async function isolatedPostgres(): Promise<IsolatedPostgres> {
   const pool = new Pool({
     connectionString,
   });
+  pool.on('error', () => {});
   const nodeDb = drizzlePg(pool, { schema });
   const db: Db = nodeDb;
   return {

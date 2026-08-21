@@ -51,6 +51,13 @@ backups/**
 tests
 e2e
 coverage
+# INVARIANT: anything `tsconfig.json` includes must either be present in the build
+# context or excluded ALONGSIDE whatever it imports. The image builds with
+# `COPY . .` then `npm run build` (= `tsc --noEmit && vite build`), so a config
+# file that survives here while its sources do not fails the build with TS2307 —
+# and it CANNOT reproduce locally, where those directories exist.
+# `playwright.config.ts` imports `./e2e/outbox`, so it must go wherever `e2e` goes.
+playwright.config.ts
 
 # Documentation files.
 *.md
