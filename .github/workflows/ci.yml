@@ -234,23 +234,30 @@ jobs:
 
       - name: verify ingress and private services
         run: |
-          curl --fail --silent --show-error --retry 10 --retry-delay 2 http://127.0.0.1/ >/dev/null
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1/api/health)" = 404
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1/api/ready)" = 404
+          edge_curl=(curl --disable --silent --show-error --noproxy '*' --resolve localhost:80:127.0.0.1)
+          echo 'verify the configured edge host serves the application'
+          "${edge_curl[@]}" --fail --retry 10 --retry-delay 2 --retry-connrefused http://localhost/ >/dev/null
+          echo 'verify public traffic cannot reach private probes'
+          test "$("${edge_curl[@]}" --output /dev/null --write-out '%{http_code}' http://localhost/api/health)" = 404
+          test "$("${edge_curl[@]}" --output /dev/null --write-out '%{http_code}' http://localhost/api/ready)" = 404
+          echo 'verify private liveness and disabled-source readiness'
           docker compose exec -T app node -e \
             "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.status===200?0:1)).catch(()=>process.exit(1))"
           docker compose exec -T app node -e \
             "fetch('http://127.0.0.1:8787/api/ready').then(async r=>{const b=await r.json();process.exit(r.status===503&&b.worker?.disabled===true?0:1)}).catch(()=>process.exit(1))"
+          echo 'verify runtime-volume access is role-specific'
           app_container="$(docker compose ps --quiet app)"
           worker_container="$(docker compose ps --quiet worker)"
           test "$(docker inspect "$app_container" --format '{{range .Mounts}}{{if eq .Destination "/app/runtime"}}{{.RW}}{{end}}{{end}}')" = false
           test "$(docker inspect "$worker_container" --format '{{range .Mounts}}{{if eq .Destination "/app/runtime"}}{{.RW}}{{end}}{{end}}')" = true
+          echo 'verify private services publish no host ports'
           test -z "$(docker compose port app 8787 2>/dev/null || true)"
           test -z "$(docker compose port db 5432 2>/dev/null || true)"
           test -z "$(docker compose port redis 6379 2>/dev/null || true)"
+          echo 'verify Caddy is the only service publishing host ports'
           published="$(
             docker compose ps --format json |
-              jq -r 'select((.Publishers // []) | length > 0) | .Service' |
+              jq -r '.Service as $service | .Publishers[]? | select(.PublishedPort > 0) | $service' |
               sort -u
           )"
           test "$published" = caddy

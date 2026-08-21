@@ -566,6 +566,30 @@ describe('v0.4.2 kill-switch operation (AC-29)', () => {
       outboxOldestQueuedAgeMs: null,
     };
     try {
+      heartbeat.recordStatus(healthySnapshot, {
+        healthy: false,
+        disabled: true,
+        sourceSucceeded: false,
+      });
+      await expect(
+        readWorkerReadiness({
+          path: heartbeatPath,
+          nowMs: heartbeatNow,
+          maxStaleSeconds: 90,
+          maxOutboxAgeSeconds: 120,
+        }),
+      ).resolves.toMatchObject({
+        ready: false,
+        snapshot: {
+          heartbeatAgeSeconds: 0,
+          lastSuccessfulCycleAgeSeconds: null,
+          disabled: true,
+          healthy: false,
+          sourceStaleCount: 0,
+          outboxDeadLetter: 0,
+        },
+      });
+
       heartbeat.recordSuccess(healthySnapshot);
       heartbeatNow += 1_000;
       heartbeat.recordStatus(healthySnapshot, {

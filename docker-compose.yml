@@ -69,8 +69,27 @@ services:
     networks:
       - edge
     healthcheck:
-      test: ['CMD', 'caddy', 'validate', '--config', '/etc/caddy/Caddyfile']
-      interval: 30s
+      # Probe Caddy's HTTP listener without coupling edge liveness to the app's
+      # separate healthcheck. Any complete HTTP response proves that Caddy is
+      # accepting connections; the reserved Host deliberately matches no site.
+      test:
+        [
+          'CMD',
+          'curl',
+          '--disable',
+          '--silent',
+          '--show-error',
+          '--noproxy',
+          '*',
+          '--output',
+          '/dev/null',
+          '--max-time',
+          '3',
+          '--header',
+          'Host: caddy-health.invalid',
+          'http://127.0.0.1:8080/',
+        ]
+      interval: 10s
       timeout: 5s
       retries: 3
       start_period: 10s

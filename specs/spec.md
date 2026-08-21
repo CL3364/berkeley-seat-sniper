@@ -1000,6 +1000,31 @@ acknowledged_at NULL, resolved_at NULL)` — `state ∈ unresolved|acknowledged|
 Verification universe: SAVED FIXTURES (`src/scraper/fixtures/**`), `MAIL_TRANSPORT=noop`
 outbox, the fake push transport, fake-signed webhook payloads, and ephemeral real
 PostgreSQL/Redis/Compose services. CI performs no Berkeley or real-mail request.
+
+`MAIL_TRANSPORT=noop` holds for EVERY CI role, including the Compose smoke test — no CI process
+constructs a provider transport, so no CI path can egress to one. Two notes that keep this from
+being weakened by accident:
+
+- **Readiness aggregation is opted into by CONFIGURING the dependency, not by declaring an
+  environment.** This is the general rule; `NODE_ENV=production` merely forces the configuration
+  to be present rather than being what activates a probe.
+  - Disk: `readDiskReadinessConfig` (`src/server/disk-readiness.ts`) returns a live config
+    whenever `DISK_READINESS_PATH` is set. `NODE_ENV` only decides whether a MISSING path is
+    fatal.
+  - Worker/outbox: the API aggregates worker state when `WORKER_HEARTBEAT_FILE` is set — the
+    honest signal that this instance was actually given the worker's marker to read — or in
+    production regardless (`src/server/app.ts`).
+    The base Compose model sets both, so the smoke test exercises aggregate worker/outbox/disk
+    readiness while every role stays on noop. **Do not switch a CI role to `NODE_ENV=production` to
+    gain that coverage.** It is already covered, and production forbids the noop transport
+    (`src/notify/runtime-config.ts`), so doing that only drags a real provider transport into CI —
+    and then, because a real transport asserts a public-facing `CADDY_BIND_ADDRESS`
+    (`src/notify/index.ts`), pulls in further synthetic production values behind it. The
+    production-only backup-marker requirement is deliberately omitted instead.
+- **Synthetic values MUST use RFC 2606 reserved domains (`.invalid`).** A reserved domain cannot
+  resolve, so a future code path that unexpectedly attempts a send cannot reach a real
+  destination. Never substitute a domain the project actually controls.
+
 Confirm/manage links are extracted from outbox bodies (§4 pinned format). An
 owner-controlled live-source and real-inbox canary is a separate release gate. Existing
 subscriber-flow fixtures explicitly set `ADMISSION_MODE=public`; that is a test setting,

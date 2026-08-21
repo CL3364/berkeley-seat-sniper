@@ -391,8 +391,12 @@ export function createApp(
     options.outboxReadinessMaxAgeSeconds,
     positiveIntegerEnv('HEALTH_OUTBOX_MAX_AGE_SECONDS', 300),
   );
-  const requireProductionReadiness =
-    options.requireProductionReadiness ?? process.env.NODE_ENV === 'production';
+  // Production always aggregates worker state. Outside production, explicitly
+  // sharing the worker marker opts the API into the same worker/outbox checks
+  // without forcing test and CI environments onto a real mail transport.
+  const requireAggregateReadiness =
+    options.requireProductionReadiness ??
+    (process.env.NODE_ENV === 'production' || Boolean(process.env.WORKER_HEARTBEAT_FILE?.trim()));
   const requireBackupReadiness = process.env.NODE_ENV === 'production';
   const requireDiskReadiness = process.env.NODE_ENV === 'production';
   const workerReadinessCheck =
@@ -494,7 +498,7 @@ export function createApp(
       } catch {
         checks.database = 'unavailable';
       }
-    } else if (requireProductionReadiness) {
+    } else if (requireAggregateReadiness) {
       checks.database = 'unavailable';
     }
     try {
@@ -540,7 +544,7 @@ export function createApp(
       }
     }
 
-    if (requireProductionReadiness) {
+    if (requireAggregateReadiness) {
       checks.worker = 'unavailable';
       try {
         const result = await workerReadinessCheck();
@@ -557,7 +561,7 @@ export function createApp(
       checks.outbox !== 'unavailable' &&
       checks.backup !== 'unavailable' &&
       checks.disk !== 'unavailable' &&
-      (!requireProductionReadiness ||
+      (!requireAggregateReadiness ||
         (checks.outbox !== 'not-configured' && checks.worker === 'ok')) &&
       (!requireBackupReadiness || checks.backup === 'ok') &&
       (!requireDiskReadiness || checks.disk === 'ok');
@@ -567,7 +571,7 @@ export function createApp(
         checks,
         outbox,
         ...(backupReadinessCheck ? { backup } : {}),
-        ...(requireProductionReadiness ? { worker } : {}),
+        ...(requireAggregateReadiness ? { worker } : {}),
       },
       ready ? 200 : 503,
     );

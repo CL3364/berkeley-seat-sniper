@@ -24,7 +24,7 @@ interface WorkerReadinessMarker {
 
 export interface WorkerReadinessSnapshot {
   heartbeatAgeSeconds: number;
-  lastSuccessfulCycleAgeSeconds: number;
+  lastSuccessfulCycleAgeSeconds: number | null;
   disabled: boolean;
   healthy: boolean;
   sourceStaleCount: number;
@@ -83,12 +83,17 @@ function evaluateWorkerMarker(
     !marker ||
     marker.version !== 2 ||
     !nonnegativeSafeInteger(marker.heartbeatAtMs) ||
-    !nonnegativeSafeInteger(marker.lastSuccessfulCycleAtMs) ||
     typeof marker.disabled !== 'boolean' ||
     typeof marker.healthy !== 'boolean' ||
     typeof marker.health !== 'object' ||
     marker.health === null
   ) {
+    return { ready: false, snapshot: null };
+  }
+
+  const lastSuccessfulCycleAtMs = marker.lastSuccessfulCycleAtMs;
+  const hasSuccessfulCycle = nonnegativeSafeInteger(lastSuccessfulCycleAtMs);
+  if (!hasSuccessfulCycle && !(lastSuccessfulCycleAtMs === null && marker.disabled)) {
     return { ready: false, snapshot: null };
   }
 
@@ -108,10 +113,9 @@ function evaluateWorkerMarker(
 
   const snapshot: WorkerReadinessSnapshot = {
     heartbeatAgeSeconds: Math.max(0, Math.floor((nowMs - marker.heartbeatAtMs) / 1_000)),
-    lastSuccessfulCycleAgeSeconds: Math.max(
-      0,
-      Math.floor((nowMs - marker.lastSuccessfulCycleAtMs) / 1_000),
-    ),
+    lastSuccessfulCycleAgeSeconds: hasSuccessfulCycle
+      ? Math.max(0, Math.floor((nowMs - lastSuccessfulCycleAtMs) / 1_000))
+      : null,
     disabled: marker.disabled,
     healthy: marker.healthy,
     sourceStaleCount: health.sourceStaleCount,
@@ -125,7 +129,8 @@ function evaluateWorkerMarker(
   };
   const ready =
     timestampIsFresh(marker.heartbeatAtMs, nowMs, maxStaleMs) &&
-    timestampIsFresh(marker.lastSuccessfulCycleAtMs, nowMs, maxStaleMs) &&
+    hasSuccessfulCycle &&
+    timestampIsFresh(lastSuccessfulCycleAtMs, nowMs, maxStaleMs) &&
     !marker.disabled &&
     marker.healthy &&
     health.sourceStaleCount === 0 &&

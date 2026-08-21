@@ -144,6 +144,51 @@ describe('strict worker heartbeat v2 readiness', () => {
     });
   });
 
+  it('exposes a fresh disabled worker without inventing a successful source cycle', async () => {
+    const result = await read(
+      marker({
+        disabled: true,
+        healthy: false,
+        lastSuccessfulCycleAtMs: null,
+      }),
+    );
+    expect(result).toEqual({
+      ready: false,
+      snapshot: {
+        ...HEALTHY_SNAPSHOT,
+        lastSuccessfulCycleAgeSeconds: null,
+        disabled: true,
+        healthy: false,
+      },
+    });
+
+    process.env.WORKER_HEARTBEAT_FILE = path;
+    const aggregateRuntime = runtime();
+    delete aggregateRuntime.requireProductionReadiness;
+    delete aggregateRuntime.workerReadinessCheck;
+    const app = createApp(repo(), undefined, aggregateRuntime);
+    const response = await app.request('http://localhost/api/ready');
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      worker: {
+        lastSuccessfulCycleAgeSeconds: null,
+        disabled: true,
+      },
+    });
+
+    delete process.env.WORKER_HEARTBEAT_FILE;
+    const unconfiguredResponse = await createApp(repo(), undefined, aggregateRuntime).request(
+      'http://localhost/api/ready',
+    );
+    expect(unconfiguredResponse.status).toBe(200);
+    expect(await unconfiguredResponse.json()).not.toHaveProperty('worker');
+
+    await expect(read(marker({ lastSuccessfulCycleAtMs: null }))).resolves.toEqual({
+      ready: false,
+      snapshot: null,
+    });
+  });
+
   it('advertises push only for the matching key on the same complete healthy marker', async () => {
     process.env.WORKER_HEARTBEAT_FILE = path;
     process.env.WORKER_HEALTH_MAX_STALE_SECONDS = '90';
