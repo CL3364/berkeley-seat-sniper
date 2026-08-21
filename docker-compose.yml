@@ -112,6 +112,15 @@ services:
     image: redis:7.4-alpine
     init: true
     restart: unless-stopped
+    # Start AS the redis user instead of starting as root and dropping down.
+    # The image entrypoint drops privileges with `setpriv`, which needs
+    # CAP_SETUID/CAP_SETGID — exactly what `cap_drop: [ALL]` removes. Without
+    # this the container dies with "setpriv: setresuid failed: Operation not
+    # permitted" and restart-loops on exit 127, which reads as an unhealthy
+    # dependency and takes the whole topology down. Same pattern the caddy
+    # service already uses, and strictly safer than granting the capabilities
+    # back: the process is never root at any point.
+    user: 'redis'
     read_only: true
     cap_drop: [ALL]
     security_opt:
