@@ -24,7 +24,7 @@
  */
 
 import { parse as parseHtml } from 'node-html-parser';
-import type { ClassKey } from '../shared/class-key';
+import { CLASS_KEY_PATTERN, type ClassKey } from '../shared/class-key';
 import { MAX_OBSERVED_COUNT, type ParseResult, type SeatStatus } from '../shared/seat-state';
 
 const BERKELEY_ORIGIN = 'https://classes.berkeley.edu';
@@ -133,7 +133,7 @@ export function parseClassPage(
     openSeats,
     waitlistOpen,
     fetchedAt: resolveFetchedAt(options.fetchedAt),
-    displayName: extractDisplayName(root),
+    displayName: extractDisplayName(root, classKey),
     enrolled: extractOptionalCount(enrollment, FIELD_LABELS.enrolled),
     capacity: extractOptionalCount(enrollment, FIELD_LABELS.capacity),
     waitlisted: persistedCountOrNull(waitlisted),
@@ -270,14 +270,41 @@ function persistedCountOrNull(value: number): number | null {
 }
 
 /**
- * A page heading is display-only. Exactly one normalized, nonblank, bounded
- * h1 is useful; every other shape is simply unknown rather than parser-broke.
+ * A page heading is display-only. Select by exact requested-class content, not
+ * heading position: Berkeley's live template includes multiple unrelated
+ * page-level h1 elements. Every absent, ambiguous, malformed, or overlong shape
+ * is simply unknown rather than parser-broke.
  */
-function extractDisplayName(root: RootNode): string | null {
-  const headings = root.querySelectorAll('h1');
-  if (headings.length !== 1) return null;
-  const value = normalizeDisplayText(headings[0].text);
-  return value !== '' && value.length <= MAX_DISPLAY_NAME_LENGTH ? value : null;
+function extractDisplayName(root: RootNode, classKey: ClassKey): string | null {
+  try {
+    const identity = CLASS_KEY_PATTERN.exec(classKey)?.groups;
+    const subject = identity?.subject;
+    const course = identity?.course;
+    const section = identity?.section;
+    const component = identity?.component;
+    const componentNum = identity?.componentNum;
+    if (!subject || !course || !section || !component || !componentNum) return null;
+
+    const expected = `${subject} ${course} ${section} - ${component} ${componentNum}`;
+    const expectedFolded = expected.toLowerCase();
+    const matches = new Set<string>();
+
+    for (const heading of root.querySelectorAll('h1')) {
+      const value = normalizeDisplayName(heading.text);
+      if (
+        value !== '' &&
+        value.length <= MAX_DISPLAY_NAME_LENGTH &&
+        value.toLowerCase() === expectedFolded
+      ) {
+        matches.add(value);
+      }
+    }
+
+    if (matches.size !== 1) return null;
+    return matches.values().next().value ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function normalizeLabel(value: string): string {
@@ -290,6 +317,10 @@ function normalizeText(value: string): string {
 
 function normalizeDisplayText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeDisplayName(value: string): string {
+  return normalizeDisplayText(value).replace(/\s*-\s*/g, ' - ');
 }
 
 function titleCaseLabel(value: string): string {

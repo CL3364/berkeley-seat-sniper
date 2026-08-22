@@ -5,3 +5,6 @@ coverage
 playwright-report
 test-results
 package-lock.json
+
+# Byte-for-byte upstream capture; Berkeley's live HTML contains malformed markup.
+src/scraper/fixtures/live-compsci-189-2026-08-21.html

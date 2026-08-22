@@ -2,10 +2,10 @@
  * Unit tests for the cache-visible public-page parser — FR-6, FR-16, AC-5,
  * AC-17.
  *
- * Saved fixtures are sanitized but retain the current Berkeley enrollment DOM:
- * one canonical identity, one `section.current-enrollment`, and the labeled
- * Total Open Seats / Waitlisted / Waitlist Max fields. No test performs I/O
- * beyond reading those repository fixtures.
+ * Saved fixtures include reduced reproductions and one captured live page. They
+ * retain one canonical identity, one `section.current-enrollment`, and the
+ * labeled Total Open Seats / Waitlisted / Waitlist Max fields. No test performs
+ * I/O beyond reading those repository fixtures.
  */
 
 import { readFileSync } from 'node:fs';
@@ -30,6 +30,7 @@ function livePage(
     heading?: string | null;
     enrolled?: string | null;
     capacity?: string | null;
+    title?: string | null;
     extraHeadings?: string;
     extraFields?: string;
   } = {},
@@ -42,6 +43,7 @@ function livePage(
     heading = null,
     enrolled = null,
     capacity = null,
+    title = null,
     extraHeadings = '',
     extraFields = '',
   } = fields;
@@ -49,6 +51,7 @@ function livePage(
     <html>
       <head>
         <link rel="canonical" href="https://classes.berkeley.edu/content/${identity}" />
+        ${title === null ? '' : `<title>${title}</title>`}
       </head>
       <body>
         ${heading === null ? '' : `<h1>${heading}</h1>`}
@@ -70,7 +73,7 @@ function livePage(
     </html>`;
 }
 
-describe('parseClassPage — sanitized live-shaped fixtures', () => {
+describe('parseClassPage — saved class-page fixtures', () => {
   it.each([
     ['open-seats.html', 'open', 3, false, 347, 350, 100, 100],
     ['zero-seats.html', 'closed', 0, false, 350, 350, 100, 100],
@@ -100,10 +103,31 @@ describe('parseClassPage — sanitized live-shaped fixtures', () => {
     },
   );
 
-  it('normalizes the sole bounded h1 and captures lenient enrollment totals', () => {
+  it('parses the captured live Berkeley page into the exact dashboard SeatState', () => {
+    const result = parseClassPage(loadFixture('live-compsci-189-2026-08-21.html'), CK, {
+      fetchedAt: '2026-08-21T20:00:00.000Z',
+    });
+
+    expect(isSeatState(result)).toBe(true);
+    expect(isParserBroke(result)).toBe(false);
+    expect(result).toEqual({
+      classKey: CK,
+      status: 'open',
+      openSeats: 41,
+      waitlistOpen: true,
+      fetchedAt: '2026-08-21T20:00:00.000Z',
+      displayName: 'COMPSCI 189 001 - LEC 001',
+      enrolled: 479,
+      capacity: 520,
+      waitlisted: 265,
+      waitlistMax: 300,
+    });
+  });
+
+  it('matches the display-form h1 case-insensitively and normalizes whitespace around its hyphen', () => {
     const result = parseClassPage(
       livePage({
-        heading: '  COMPSCI\n  189 001  -  LEC 001  ',
+        heading: '  compsci\n  189 001-\n  lec 001  ',
         enrolled: '347',
         capacity: '350',
       }),
@@ -111,13 +135,72 @@ describe('parseClassPage — sanitized live-shaped fixtures', () => {
     );
 
     expect(isSeatState(result)).toBe(true);
+    expect(isParserBroke(result)).toBe(false);
     expect(result).toMatchObject({
-      displayName: 'COMPSCI 189 001 - LEC 001',
+      displayName: 'compsci 189 001 - lec 001',
       enrolled: 347,
       capacity: 350,
       waitlisted: 0,
       waitlistMax: 0,
     });
+  });
+
+  it('deduplicates matching h1 elements with the same normalized source value', () => {
+    const result = parseClassPage(
+      livePage({
+        heading: 'COMPSCI 189 001 - LEC 001',
+        extraHeadings: '<h1>  COMPSCI\n 189 001  -  LEC 001 </h1>',
+      }),
+      CK,
+    );
+
+    expect(isSeatState(result)).toBe(true);
+    expect(isParserBroke(result)).toBe(false);
+    expect(result).toMatchObject({ displayName: 'COMPSCI 189 001 - LEC 001' });
+  });
+
+  it('returns null for distinct normalized h1 values that both match case-insensitively', () => {
+    const result = parseClassPage(
+      livePage({
+        heading: 'COMPSCI 189 001 - LEC 001',
+        extraHeadings: '<h1>compsci 189 001 - lec 001</h1>',
+      }),
+      CK,
+    );
+
+    expect(isSeatState(result)).toBe(true);
+    expect(isParserBroke(result)).toBe(false);
+    expect(result).toMatchObject({ displayName: null });
+  });
+
+  it('returns a successful SeatState with null when no h1 matches the display form', () => {
+    const result = parseClassPage(
+      livePage({
+        heading: '2026 Fall COMPSCI 189 001 LEC 001',
+        extraHeadings: '<h1>Berkeley Academic Guide</h1>',
+      }),
+      CK,
+    );
+
+    expect(isSeatState(result)).toBe(true);
+    expect(isParserBroke(result)).toBe(false);
+    expect(result).toMatchObject({
+      status: 'closed',
+      openSeats: 0,
+      waitlistOpen: false,
+      displayName: null,
+    });
+  });
+
+  it('does not use a term-qualified document title as a display-name fallback', () => {
+    const result = parseClassPage(
+      livePage({ title: '2026 Fall COMPSCI 189 001 LEC 001 | UCB Class Search' }),
+      CK,
+    );
+
+    expect(isSeatState(result)).toBe(true);
+    expect(isParserBroke(result)).toBe(false);
+    expect(result).toMatchObject({ displayName: null });
   });
 
   it('returns explicit null observations when optional markup is absent', () => {
@@ -134,11 +217,6 @@ describe('parseClassPage — sanitized live-shaped fixtures', () => {
   });
 
   it.each([
-    {
-      label: 'multiple headings',
-      html: livePage({ heading: 'First', extraHeadings: '<h1>Second</h1>' }),
-      expected: { displayName: null },
-    },
     {
       label: 'blank heading',
       html: livePage({ heading: '   ' }),
