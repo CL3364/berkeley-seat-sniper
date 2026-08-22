@@ -1089,6 +1089,7 @@ async function handleObservation(context: ObservationContext): Promise<void> {
       lastCapacity: previous.lastCapacity,
       lastWaitlisted: previous.lastWaitlisted,
       lastWaitlistMax: previous.lastWaitlistMax,
+      lastOpenReserved: previous.lastOpenReserved,
       sourceFreshUntil,
     });
     onProgress();

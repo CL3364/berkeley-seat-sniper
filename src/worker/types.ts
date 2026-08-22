@@ -24,6 +24,7 @@ export interface AlertDeliveryInput {
   openedAt: string;
   reason: NotifyReason;
   openSeats: number;
+  openReserved: number | null;
 }
 
 export interface PendingAlertDelivery extends AlertDeliveryInput {
@@ -43,6 +44,7 @@ export interface PersistedDashboardObservations {
   lastCapacity: number | null;
   lastWaitlisted: number | null;
   lastWaitlistMax: number | null;
+  lastOpenReserved: number | null;
 }
 
 export interface OpeningTransitionInput {

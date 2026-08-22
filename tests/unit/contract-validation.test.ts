@@ -583,6 +583,7 @@ describe('watch freshness response schemas — v0.4', () => {
     capacity: 350,
     waitlisted: 100,
     waitlistMax: 100,
+    openReserved: 2,
     waitlistOpen: false,
   } as const;
 
@@ -613,6 +614,7 @@ describe('watch freshness response schemas — v0.4', () => {
           capacity: null,
           waitlisted: null,
           waitlistMax: null,
+          openReserved: null,
           waitlistOpen: null,
         },
       ],
@@ -658,6 +660,9 @@ describe('watch freshness response schemas — v0.4', () => {
     const missingDisplayName: Record<string, unknown> = { ...observedFreshness };
     delete missingDisplayName.displayName;
     expect(WatchFreshnessSchema.safeParse(missingDisplayName).success).toBe(false);
+    const missingOpenReserved: Record<string, unknown> = { ...observedFreshness };
+    delete missingOpenReserved.openReserved;
+    expect(WatchFreshnessSchema.safeParse(missingOpenReserved).success).toBe(false);
     expect(
       WatchFreshnessSchema.safeParse({
         ...observedFreshness,
@@ -667,7 +672,25 @@ describe('watch freshness response schemas — v0.4', () => {
         capacity: null,
         waitlisted: null,
         waitlistMax: null,
+        openReserved: null,
         waitlistOpen: null,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('rejects a reserved count above total open seats', () => {
+    expect(
+      WatchFreshnessSchema.safeParse({
+        ...observedFreshness,
+        openSeats: 2,
+        openReserved: 3,
+      }).success,
+    ).toBe(false);
+    expect(
+      WatchFreshnessSchema.safeParse({
+        ...observedFreshness,
+        openSeats: 2,
+        openReserved: 2,
       }).success,
     ).toBe(true);
   });

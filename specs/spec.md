@@ -409,6 +409,25 @@ wherever code or this spec says "class," read "Section" (decision D11; no rename
   while a 304 preserves the prior observation: observed-absent and not-observed are
   different facts and must not be collapsed.
 
+- FR-27 (reserved-seat honesty): the page publishes `Open Reserved Seats: N reserved for
+<Reservation Group>` inside the same `section.current-enrollment` the parser already reads.
+  `openReserved` is a SUBSET of `openSeats`, never an addition. A live capture on 2026-08-21
+  observed `Total Open Seats: 41` with `Open Reserved Seats: 41` — every open seat reserved for
+  "Students with Enrollment Permission", enrollable by nobody else.
+  **Alerting is NOT gated on this** (owner ruling 2026-08-22): an Alert fires on any seat opening,
+  reserved or not, because a reserved seat is genuinely available to whoever holds that permission
+  and suppressing would cost them the notification. What changes is HONESTY, not the trigger — the
+  dashboard box and the Alert body must say when open seats are reserved, e.g. "41 open (all
+  reserved)", instead of presenting a bare count the reader will assume is general.
+  `openReserved` is an OPTIONAL observation under FR-26: absent, malformed, or out-of-bound yields
+  `null` and NEVER `parser-broke`. `null` means "the page published no reserved line" and is NOT
+  equal to zero reserved — render the plain count in that case and never infer 0.
+  This field does NOT establish ELIGIBILITY. Without a login the system cannot know whether a given
+  Subscriber belongs to the group, so it is display-only: never filter, rank, or suppress on it.
+  Extraction note: this field's markup differs from the other labeled values — the label sits alone
+  in its `<div>` and the count lives in a following `<div class="details">`, so the shared
+  label-then-value helper does not reach it.
+
 ## 4. API contract (summary; `src/shared/**` is authoritative)
 
 Request bodies accept a class identifier as a URL **or** a code; both normalize to a
@@ -529,14 +548,14 @@ Token-scoped (signed manage token in path):
   `{ classKey, source: 'public-class-page', lastCheckedAt: datetime|null,
 sourceStale: boolean, displayName: string|null, openSeats: int|null, enrolled: int|null,
 capacity: int|null, waitlisted: int|null, waitlistMax: int|null,
-waitlistOpen: boolean|null }`. `lastCheckedAt` is a successful public-page parse, not an SIS
+waitlistOpen: boolean|null, openReserved: int|null }`. `lastCheckedAt` is a successful public-page parse, not an SIS
   timestamp; `sourceStale` is true when no baseline exists or the cache-aware next-check
   deadline plus the two-minute target has passed.
   `watches` is a DERIVED projection of `watchFreshness` (same order, same length) and is
   retained for compatibility; `watchFreshness` is the authoritative per-Watch record.
-  The seven observation fields drive the dashboard (FR-25). Each is REQUIRED-BUT-NULLABLE:
+  The eight observation fields drive the dashboard (FR-25, FR-27). Each is REQUIRED-BUT-NULLABLE:
   the key is always present and `null` means "not observed yet". They are LEFT-joined from
-  `class_state`, so a Watch whose Section has never been polled carries `null` for all seven
+  `class_state`, so a Watch whose Section has never been polled carries `null` for all eight
   — a normal new Watch, not an error. `waitlisted` counts students QUEUED on the waitlist,
   NOT open waitlist slots; open slots are `waitlistMax - waitlisted`, and a rendered
   open-waitlist count > 0 IMPLIES `waitlistOpen` is true (not a biconditional — `waitlistOpen`
@@ -623,7 +642,7 @@ Shared types (`src/shared/`): generic `EmailSchema` plus base-address exact-doma
 (`class-key.ts`) with bounded real catalog identifiers (numeric or alphanumeric section /
 component ids up to 8 characters and alphabetic component codes up to 8 characters);
 `SeatState { classKey, status, openSeats, waitlistOpen, fetchedAt, displayName?, enrolled?,
-capacity?, waitlisted?, waitlistMax? }` (the five trailing observations are OPTIONAL here —
+capacity?, waitlisted?, waitlistMax?, openReserved? }` (the six trailing observations are OPTIONAL here —
 see §5 and FR-26 — while their `WatchFreshness` counterparts are required-but-nullable),
 `MAX_OBSERVED_COUNT`,
 `ParseResult = SeatState | { kind: 'parser-broke', … } | { kind: 'class-gone', … }`,
@@ -644,7 +663,7 @@ client-side — no node builtins). Admission additions are `AdmissionModeSchema`
 Every `class_key` column stores the canonical `ClassKey` from `src/shared/class-key.ts`
 (validate with `ClassKeySchema` on the way in). `class_state` mirrors `SeatState`, which
 carries `classKey, status, openSeats, waitlistOpen, fetchedAt` plus the FR-25 observations
-`displayName, enrolled, capacity, waitlisted, waitlistMax`. Those five are OPTIONAL on
+`displayName, enrolled, capacity, waitlisted, waitlistMax, openReserved`. Those six are OPTIONAL on
 `SeatState` — unlike their required-but-nullable counterparts on the wire
 (`WatchFreshness`, §4) — because `SeatState` has exactly one producer, `parseClassPage`,
 so compiler-enforced strictness buys no safety there and only churns construction sites.
@@ -688,17 +707,17 @@ created_at)` — one row per registered browser. `endpoint` is globally unique; 
   notifier deletes a row when the push service says the subscription is gone (404/410).
 - `class_state(class_key PK, last_status, last_open_seats, last_waitlist_open, updated_at,
 source_fresh_until, display_name NULL, last_enrolled NULL, last_capacity NULL,
-last_waitlisted NULL, last_waitlist_max NULL)`
+last_waitlisted NULL, last_waitlist_max NULL, last_open_reserved NULL)`
   — `last_status` ∈ `open|waitlist|closed`; drives 0→>0 transition detection (FR-4) and
   dedupe (FR-5). NEITHER a `parser-broke` NOR a `class-gone` cycle overwrites this table
   (FR-6/FR-13); only a successful `SeatState` parse upserts. `updated_at` is exposed as
   `lastCheckedAt`; `source_fresh_until` is computed from `Age`/`Cache-Control` plus the
   two-minute target and drives `sourceStale`.
-  The five trailing columns are the FR-25 dashboard observations and are ALL nullable —
+  The six trailing columns are the FR-25/FR-27 dashboard observations and are ALL nullable —
   a row only exists after a successful parse, but any individual observation may be absent
   (optional markup) or out of the persisted bound. `display_name` is bounded to 1–256
   characters and is display-only: never an identity, a lookup key, or part of a `ClassKey`.
-  The worker carries all five on BOTH write paths (FR-26): a successful 200 whose optional
+  The worker carries all six on BOTH write paths (FR-26): a successful 200 whose optional
   markup disappeared CLEARS them to null, while a trusted 304 PRESERVES the prior
   observation — observed-absent and not-observed must not collapse into one value. Note
   `last_waitlist_open` is NOT NULL while `last_waitlisted`/`last_waitlist_max` are nullable,
@@ -1232,14 +1251,22 @@ not a production default. Admission-specific tests exercise all three modes sepa
   AND the requested Section would also exceed unique-Section capacity, the response is
   `watch_limit_reached`, not `capacity_exceeded`.
 - AC-33 [FR-25]: The manage response carries one `watchFreshness` entry per LIVE Watch,
-  each with all seven observation keys present. A Watch whose Section has never been polled
-  returns `null` for all seven and the view renders a dash for each without error. For any
+  each with all eight observation keys present. A Watch whose Section has never been polled
+  returns `null` for all eight and the view renders a dash for each without error. For any
   single snapshot a rendered open-waitlist count > 0 IMPLIES `waitlistOpen` is true. The
   converse is NOT asserted and must not be tested as one: `waitlistOpen` true with null counts
   renders a dash, and `waitlistOpen` null renders a dash whatever the counts say — reachable for
   rows migrated before the observation columns existed. `waitlistOpen` false renders 0. With the
   saved fixture (Waitlisted 100 / Waitlist Max 100) the box renders 0 open waitlist slots
   out of 100, never 100 of 100. The official class URL is derived from `classKey` alone.
+- AC-35 [FR-27]: A fixture whose `section.current-enrollment` carries
+  `Open Reserved Seats: 41 reserved for Students with Enrollment Permission` parses to a
+  `SeatState` with `openReserved: 41` alongside `openSeats: 41`; a fixture with NO reserved line
+  parses with `openReserved: null` and every other field unchanged. Absent MUST NOT yield
+  `parser-broke` and MUST NOT be coerced to `0`. The dashboard box for a watch whose
+  `openReserved` equals its `openSeats` states that every open seat is reserved rather than
+  showing a bare count, and shows the plain count with no reserved claim when `openReserved` is
+  `null`. An Alert still fires for a reserved-only opening — FR-27 does not gate alerting.
 - AC-34 [FR-26]: A fixture whose page omits the display heading, `Enrolled`, or `Capacity`
   still parses to a `SeatState` with those fields null and NEVER yields `parser-broke`, and
   that cycle's Subscriber alerts are unaffected. Removing `Total Open Seats`, `Waitlisted`,
@@ -1272,7 +1299,7 @@ not a production default. Admission-specific tests exercise all three modes sepa
   student, and `ADMISSION_MODE=public` is not a planned state for v1. The mode still exists
   in the code and its tests remain valid, but reaching it is out of scope; do not treat the
   gate chain below as pending work. Should that decision ever be revisited, the bar is:
-  AC-1–AC-34 pass, the restore and live canaries pass, the two-minute source-visible SLO
+  AC-1–AC-35 pass, the restore and live canaries pass, the two-minute source-visible SLO
   and mail backlog stay healthy across the pilot, complaints/bounces remain within the
   provider's healthy range, and rollback/kill-switch procedures have been exercised.
   Existing subscriber-flow fixtures that set `ADMISSION_MODE=public` remain a TEST setting
@@ -1302,10 +1329,10 @@ notifications, not a role alias. No pilot invitation goes out until it is assign
 | 6   | Notify: individual-job Resend throttling/idempotency, stable durable-time rendering, retry classification, fail-closed suppression, best-effort push        | notifier-engineer (notify)                  | 1, 2       |
 | 7   | Minimal UI integration: Berkeley validation/copy, session-scoped pilot invite journey, freshness/capacity/error states, mirrored service-worker key grammar | frontend-engineer (ui)                      | 1, 4       |
 | 8   | Single-VPS topology: Redis/private networks, one-shot migrations, backups, health/metrics, deploy/rollback                                                  | devops-engineer (infra)                     | 1, 2, 4–6  |
-| 9   | Unit/integration coverage for FR-1–FR-26 and AC-1–AC-34, including activation/admission concurrency and real PostgreSQL/Redis lanes                         | test-engineer (test)                        | 2–6        |
+| 9   | Unit/integration coverage for FR-1–FR-27 and AC-1–AC-35, including activation/admission concurrency and real PostgreSQL/Redis lanes                         | test-engineer (test)                        | 2–6        |
 | 10  | Browser journeys and production-like Compose smoke tests                                                                                                    | e2e-qa-engineer (e2e)                       | 7–9        |
 | 11  | Independent security and code review                                                                                                                        | security-reviewer + code-reviewer (sec/rev) | 3–8        |
-| 12  | Full gates, release evidence, AC-1–AC-34, then `.claude/acceptance.passed`                                                                                  | lead                                        | 9–11       |
+| 12  | Full gates, release evidence, AC-1–AC-35, then `.claude/acceptance.passed`                                                                                  | lead                                        | 9–11       |
 
 Task 1 blocks implementation. Tasks 2 and 3 then run in parallel; 4 and 6 follow the DB
 contract; 5 joins DB + source; 7/8 integrate; independent tests/reviews precede acceptance.

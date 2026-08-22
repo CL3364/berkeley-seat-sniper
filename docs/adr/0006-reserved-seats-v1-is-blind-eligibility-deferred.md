@@ -20,6 +20,39 @@ The shipped v1 parser reads a single `available` count
 (`.enroll-numbers .available .count`) with **no general-vs-reserved breakdown**, and the
 product has **no login**, so it cannot know a Subscriber's eligibility.
 
+## Amendment (2026-08-22) — the premise below is FACTUALLY WRONG
+
+**Corrected by a live capture, not by argument.** The Context section states the parser "reads a
+single `available` count ... with **no general-vs-reserved breakdown**", and the Decision defers
+reservation-aware work to Plan 0006 as "dependent on a structured source (Plan 0001, the SIS API)".
+
+Both rest on the belief that the public page does not publish the breakdown. **It does**, twice
+over, and `src/scraper/fixtures/live-compsci-189-2026-08-21.html` is the proof:
+
+- visible, inside the very `section.current-enrollment` the parser already scopes to:
+  `Open Reserved Seats: 41 reserved for Students with Enrollment Permission`
+- embedded JSON: `"openReserved": 41` plus a per-group `seatReservations` array carrying
+  `requirementGroup`, `maxEnroll`, and `enrolledCount`.
+
+That page reported `Total Open Seats: 41` and `Open Reserved Seats: 41` — **every open seat was
+reserved**. A live poller would have alerted every Subscriber watching COMPSCI 189 that 41 seats
+opened, and none of them could enrol. The risk this ADR accepted as theoretical was live on the
+first real page the project ever fetched.
+
+**What this unblocks, and what it does not.** It supplies the general-vs-reserved COUNT, so the
+product can be honest about what kind of seat opened. It does NOT supply ELIGIBILITY — there is
+still no login, so the system cannot know whether a given Subscriber belongs to a Reservation
+Group. This ADR conflates the two; only the second genuinely needs a structured identity source.
+Plan 0006's "Blocked pending a new data-source/product design" status therefore applies to the
+eligibility half only.
+
+**Owner ruling 2026-08-22 — alert regardless.** An Alert fires on any seat opening, reserved or
+not. A reserved seat is genuinely available to whoever holds the permission, and suppressing it
+would cost those students the notification while FR-5 dedupe might withhold the next one. What
+changes is honesty rather than the trigger: `openReserved` is now an observation (FR-27) and both
+the dashboard box and the Alert body must say when open seats are reserved. Display-only — never
+filter, rank, or suppress on it.
+
 ## Decision
 
 For v1, treat **every open seat alike** — a Seat Opening fires on the single available

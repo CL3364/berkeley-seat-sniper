@@ -700,6 +700,7 @@ test.describe('AC-18: manage view renders source freshness truthfully', () => {
               waitlisted: 5,
               waitlistMax: 10,
               waitlistOpen: true,
+              openReserved: null,
             },
             {
               classKey: CLASS_KEY_COL,
@@ -713,6 +714,7 @@ test.describe('AC-18: manage view renders source freshness truthfully', () => {
               waitlisted: 100,
               waitlistMax: 100,
               waitlistOpen: false,
+              openReserved: null,
             },
             {
               classKey: CLASS_KEY_TUT,
@@ -726,6 +728,7 @@ test.describe('AC-18: manage view renders source freshness truthfully', () => {
               waitlisted: null,
               waitlistMax: null,
               waitlistOpen: null,
+              openReserved: null,
             },
           ],
         },
@@ -781,6 +784,7 @@ test.describe('AC-33: the watch dashboard renders seat and waitlist counts truth
               waitlisted: 100,
               waitlistMax: 100,
               waitlistOpen: false,
+              openReserved: null,
             },
             {
               // Never polled: every observation null. Must render dashes and
@@ -796,6 +800,7 @@ test.describe('AC-33: the watch dashboard renders seat and waitlist counts truth
               waitlisted: null,
               waitlistMax: null,
               waitlistOpen: null,
+              openReserved: null,
             },
           ],
         },
@@ -870,6 +875,7 @@ test.describe('AC-33: the watch dashboard renders seat and waitlist counts truth
               waitlisted: 5,
               waitlistMax: 10,
               waitlistOpen: false,
+              openReserved: null,
             },
           ],
         },
@@ -884,6 +890,92 @@ test.describe('AC-33: the watch dashboard renders seat and waitlist counts truth
 
     await expect(card.getByText('0 of 10')).toBeVisible();
     await expect(card.getByText('5 of 10')).toHaveCount(0);
+  });
+
+  test('reserved open seats are disclosed, and null reserved makes no claim', async ({ page }) => {
+    const token = 'reserved-seats-token';
+
+    // Mirrors the LIVE capture of 2026-08-21: Total Open Seats 41, Open Reserved
+    // Seats 41 for "Students with Enrollment Permission". Every open seat was
+    // reserved, so a bare "41 of 520" would read as 41 seats the student could take.
+    await page.route(`**/api/subscriptions/${token}`, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        json: {
+          email: 'reserved-e2e@berkeley.edu',
+          confirmed: true,
+          watches: [CLASS_KEY_1, CLASS_KEY_999L, CLASS_KEY_COL],
+          watchFreshness: [
+            {
+              // all open seats reserved
+              classKey: CLASS_KEY_1,
+              source: 'public-class-page',
+              lastCheckedAt: '2026-08-21T22:19:15.592Z',
+              sourceStale: false,
+              displayName: 'COMPSCI 189 001 - LEC 001',
+              openSeats: 41,
+              enrolled: 479,
+              capacity: 520,
+              waitlisted: 265,
+              waitlistMax: 300,
+              waitlistOpen: true,
+              openReserved: 41,
+            },
+            {
+              // some reserved, some general
+              classKey: CLASS_KEY_999L,
+              source: 'public-class-page',
+              lastCheckedAt: '2026-08-21T22:19:15.592Z',
+              sourceStale: false,
+              displayName: 'COMPSCI 10 999L - LAB 999L',
+              openSeats: 10,
+              enrolled: 90,
+              capacity: 100,
+              waitlisted: 0,
+              waitlistMax: 20,
+              waitlistOpen: true,
+              openReserved: 3,
+            },
+            {
+              // page published NO reserved line — must make no claim either way
+              classKey: CLASS_KEY_COL,
+              source: 'public-class-page',
+              lastCheckedAt: '2026-08-21T22:19:15.592Z',
+              sourceStale: false,
+              displayName: 'INFO 295 001 - COL 001',
+              openSeats: 5,
+              enrolled: 25,
+              capacity: 30,
+              waitlisted: 0,
+              waitlistMax: 10,
+              waitlistOpen: true,
+              openReserved: null,
+            },
+          ],
+        },
+      });
+    });
+
+    await page.goto(`/?token=${token}`);
+    const list = page.getByRole('list', { name: 'watched classes' });
+    const allReserved = list.getByRole('listitem').filter({ hasText: CLASS_KEY_1 });
+    const someReserved = list.getByRole('listitem').filter({ hasText: CLASS_KEY_999L });
+    const unknown = list.getByRole('listitem').filter({ hasText: CLASS_KEY_COL });
+
+    await expect(allReserved.getByText('41 of 520')).toBeVisible();
+    await expect(allReserved.getByText('(all reserved)')).toBeVisible();
+
+    await expect(someReserved.getByText('10 of 100')).toBeVisible();
+    await expect(someReserved.getByText('(3 reserved)')).toBeVisible();
+
+    // null is NOT zero: say nothing rather than "0 reserved".
+    await expect(unknown.getByText('5 of 30')).toBeVisible();
+    await expect(unknown.getByText(/reserved/i)).toHaveCount(0);
   });
 
   test('waitlistOpen=null renders a dash even when the counts would compute', async ({ page }) => {
@@ -917,6 +1009,7 @@ test.describe('AC-33: the watch dashboard renders seat and waitlist counts truth
               waitlisted: 5,
               waitlistMax: 10,
               waitlistOpen: null,
+              openReserved: null,
             },
           ],
         },
@@ -967,6 +1060,7 @@ test.describe('AC-33: the watch dashboard renders seat and waitlist counts truth
               waitlisted: null,
               waitlistMax: null,
               waitlistOpen: true,
+              openReserved: null,
             },
           ],
         },
@@ -1012,6 +1106,7 @@ test.describe('AC-21 / capacity: canonical backend errors produce actionable UI 
       waitlisted: null,
       waitlistMax: null,
       waitlistOpen: null,
+      openReserved: null,
     });
 
     await page.route(`**/api/subscriptions/${token}**`, async (route) => {

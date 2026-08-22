@@ -18,6 +18,7 @@ import { eq, sql } from 'drizzle-orm';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import {
+  alertDeliveries,
   makeTestDb,
   makeRepo,
   confirmSubscriber,
@@ -181,6 +182,42 @@ describe('AC-9: pending subscriber receives no alert; only the confirmed one is 
     expect(summary.fetched).toBe(0);
     expect(alertOutbox(notifier.outbox)).toHaveLength(0);
     expect(summary.notified).toBe(0);
+  });
+});
+
+describe('FR-27: legacy durable alert snapshots', () => {
+  beforeEach(() => {
+    process.env.TOKEN_SECRET = TOKEN_SECRET;
+  });
+
+  afterEach(() => {
+    delete process.env.TOKEN_SECRET;
+  });
+
+  it('persists 41 reserved seats and carries that opening through the real renderer', async () => {
+    const { db, api, notifier, deps } = await makeBed();
+    const { id } = await api.createSubscriber(EMAIL_CONFIRMED, [CK]);
+    await confirmSubscriber(db, id);
+
+    deps.fetchClass = fakeFetch('zero-seats.html');
+    await runPollCycle(deps);
+    deps.fetchClass = fakeFetch('live-compsci-189-2026-08-21.html');
+    const summary = await runPollCycle(deps);
+
+    expect(summary.notified).toBe(1);
+    expect(await db.select().from(alertDeliveries)).toEqual([
+      expect.objectContaining({
+        subscriberId: id,
+        classKey: CK,
+        openSeats: 41,
+        openReserved: 41,
+      }),
+    ]);
+    expect(alertOutbox(notifier.outbox)).toEqual([
+      expect.objectContaining({
+        body: expect.stringContaining('ALL 41 of those seats are RESERVED'),
+      }),
+    ]);
   });
 });
 

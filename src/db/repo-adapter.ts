@@ -137,6 +137,7 @@ export function makeRepo(db: Db, options: CapacityAdmissionOptions = {}): BoundR
       capacity: row.capacity,
       waitlisted: row.waitlisted,
       waitlistMax: row.waitlistMax,
+      openReserved: row.openReserved,
       waitlistOpen: row.waitlistOpen,
     }));
   }

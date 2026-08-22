@@ -16,6 +16,7 @@ const PRIOR_OBSERVATIONS = {
   lastCapacity: 350,
   lastWaitlisted: 100,
   lastWaitlistMax: 100,
+  lastOpenReserved: null,
 } as const;
 
 let originalKillSwitch: string | undefined;
@@ -124,16 +125,17 @@ describe('legacy worker dashboard observation persistence', () => {
       lastCapacity: null,
       lastWaitlisted: null,
       lastWaitlistMax: null,
+      lastOpenReserved: null,
     });
   });
 
-  it('carries the complete successful snapshot through the atomic opening path', async () => {
+  it('carries a reserved-only opening through the atomic delivery path', async () => {
     const claimOpeningDeliveries = vi.fn(async () => []);
     const repo = legacyRepo({ claimOpeningDeliveries });
     const result: SeatState = {
       classKey: CLASS_KEY,
       status: 'open',
-      openSeats: 3,
+      openSeats: 41,
       waitlistOpen: false,
       fetchedAt: OBSERVED_AT,
       displayName: 'COMPSCI 189 001 - LEC 001',
@@ -141,6 +143,7 @@ describe('legacy worker dashboard observation persistence', () => {
       capacity: 350,
       waitlisted: 100,
       waitlistMax: 100,
+      openReserved: 41,
     };
 
     await runPollCycle({
@@ -154,15 +157,18 @@ describe('legacy worker dashboard observation persistence', () => {
     expect(claimOpeningDeliveries).toHaveBeenCalledWith(
       expect.objectContaining({
         classKey: CLASS_KEY,
+        reason: 'seats-open',
+        openSeats: 41,
         nextState: {
           lastStatus: 'open',
-          lastOpenSeats: 3,
+          lastOpenSeats: 41,
           lastWaitlistOpen: false,
           displayName: 'COMPSCI 189 001 - LEC 001',
           lastEnrolled: 347,
           lastCapacity: 350,
           lastWaitlisted: 100,
           lastWaitlistMax: 100,
+          lastOpenReserved: 41,
         },
       }),
     );
@@ -222,12 +228,79 @@ describe('v0.4 worker dashboard observation persistence', () => {
       lastCapacity: null,
       lastWaitlisted: null,
       lastWaitlistMax: null,
+      lastOpenReserved: null,
       sourceFreshUntil: new Date('2026-07-30T20:02:00.000Z'),
     });
   });
 
+  it('carries a reserved-only opening through the atomic enqueue path', async () => {
+    const commitOpeningAndEnqueueMail = vi.fn(async () => ({ transitioned: true, enqueued: 1 }));
+    const repo = v04Repo({ commitOpeningAndEnqueueMail });
+    const result: SeatState = {
+      classKey: CLASS_KEY,
+      status: 'open',
+      openSeats: 41,
+      waitlistOpen: false,
+      fetchedAt: OBSERVED_AT,
+      displayName: 'COMPSCI 189 001 - LEC 001',
+      enrolled: 347,
+      capacity: 350,
+      waitlisted: 100,
+      waitlistMax: 100,
+      openReserved: 41,
+    };
+    const source: AvailabilitySource = {
+      fetch: vi.fn(
+        async () =>
+          ({
+            kind: 'result',
+            result,
+            cache: null,
+          }) satisfies AvailabilityObservation,
+      ),
+      beginCycle: vi.fn(),
+      endCycle: vi.fn(),
+    };
+
+    await runCacheAwarePollCycle({
+      repo,
+      source,
+      mailDispatcher: idleMailDispatcher(),
+      sourceOnly: true,
+      logger: quietLogger(),
+      nowMs: () => Date.parse(OBSERVED_AT),
+    });
+
+    expect(commitOpeningAndEnqueueMail).toHaveBeenCalledWith({
+      classKey: CLASS_KEY,
+      previousStateVersion: 4,
+      openedAt: OBSERVED_AT,
+      reason: 'seats-open',
+      openSeats: 41,
+      nextState: {
+        lastStatus: 'open',
+        lastOpenSeats: 41,
+        lastWaitlistOpen: false,
+        displayName: 'COMPSCI 189 001 - LEC 001',
+        lastEnrolled: 347,
+        lastCapacity: 350,
+        lastWaitlisted: 100,
+        lastWaitlistMax: 100,
+        lastOpenReserved: 41,
+        sourceFreshUntil: new Date('2026-07-30T20:02:00.000Z'),
+      },
+    });
+  });
+
   it('preserves every prior observation on a trusted 304', async () => {
-    const repo = v04Repo();
+    const repo = v04Repo({
+      getClassState: vi.fn(async () => ({
+        ...previousState(),
+        lastStatus: 'open' as const,
+        lastOpenSeats: 41,
+        lastOpenReserved: 41,
+      })),
+    });
     const schedule = new SourceScheduleState();
     const config = { ...readV04WorkerConfig({}), pollJitterMs: 0 };
     const previousCache: SourceCacheMetadata = {
@@ -274,10 +347,11 @@ describe('v0.4 worker dashboard observation persistence', () => {
 
     expect(repo.upsertClassState).toHaveBeenCalledWith({
       classKey: CLASS_KEY,
-      lastStatus: 'closed',
-      lastOpenSeats: 0,
+      lastStatus: 'open',
+      lastOpenSeats: 41,
       lastWaitlistOpen: false,
       ...PRIOR_OBSERVATIONS,
+      lastOpenReserved: 41,
       sourceFreshUntil: new Date('2026-07-30T20:02:00.000Z'),
     });
   });

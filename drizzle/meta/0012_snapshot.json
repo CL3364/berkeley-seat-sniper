@@ -1,0 +1,1207 @@
+{
+  "id": "44dc6337-8323-4100-b6a7-dd87bbb88765",
+  "prevId": "6e6a9753-9823-49f9-ba09-b736cc5fb522",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.alert_deliveries": {
+      "name": "alert_deliveries",
+      "schema": "",
+      "columns": {
+        "subscriber_id": {
+          "name": "subscriber_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "class_key": {
+          "name": "class_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "opened_at": {
+          "name": "opened_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "open_seats": {
+          "name": "open_seats",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "open_reserved": {
+          "name": "open_reserved",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "watch_activation_order": {
+          "name": "watch_activation_order",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cancelled_at": {
+          "name": "cancelled_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dead_lettered_at": {
+          "name": "dead_lettered_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terminal_at": {
+          "name": "terminal_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_idempotency_key": {
+          "name": "provider_idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_message_id": {
+          "name": "provider_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_accepted_at": {
+          "name": "provider_accepted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attempt_count": {
+          "name": "attempt_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "next_attempt_at": {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "alert_deliveries_pending_idx": {
+          "name": "alert_deliveries_pending_idx",
+          "columns": [
+            {
+              "expression": "next_attempt_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"alert_deliveries\".\"sent_at\" is null and \"alert_deliveries\".\"cancelled_at\" is null and \"alert_deliveries\".\"dead_lettered_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "alert_deliveries_subscriber_id_subscribers_id_fk": {
+          "name": "alert_deliveries_subscriber_id_subscribers_id_fk",
+          "tableFrom": "alert_deliveries",
+          "tableTo": "subscribers",
+          "columnsFrom": [
+            "subscriber_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "alert_deliveries_subscriber_class_opened_pk": {
+          "name": "alert_deliveries_subscriber_class_opened_pk",
+          "columns": [
+            "subscriber_id",
+            "class_key",
+            "opened_at"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "alert_deliveries_provider_idempotency_uq": {
+          "name": "alert_deliveries_provider_idempotency_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "provider_idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "alert_deliveries_class_key_valid": {
+          "name": "alert_deliveries_class_key_valid",
+          "value": "\"alert_deliveries\".\"class_key\" ~ '^[0-9]{4}-(fall|spring|summer)-[a-z0-9]{1,32}-[a-z0-9]{1,32}-((?=[a-z0-9]{1,8}-)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})-[a-z]{2,8}-((?=[a-z0-9]{1,8}$)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})$'"
+        },
+        "alert_deliveries_reason_valid": {
+          "name": "alert_deliveries_reason_valid",
+          "value": "\"alert_deliveries\".\"reason\" in ('seats-open', 'waitlist-open')"
+        },
+        "alert_deliveries_open_seats_nonnegative": {
+          "name": "alert_deliveries_open_seats_nonnegative",
+          "value": "\"alert_deliveries\".\"open_seats\" >= 0"
+        },
+        "alert_deliveries_open_reserved_subset": {
+          "name": "alert_deliveries_open_reserved_subset",
+          "value": "\"alert_deliveries\".\"open_reserved\" is null\n        or (\"alert_deliveries\".\"open_reserved\" >= 0 and \"alert_deliveries\".\"open_reserved\" <= \"alert_deliveries\".\"open_seats\")"
+        },
+        "alert_deliveries_attempt_count_nonnegative": {
+          "name": "alert_deliveries_attempt_count_nonnegative",
+          "value": "\"alert_deliveries\".\"attempt_count\" >= 0"
+        },
+        "alert_deliveries_watch_order_positive": {
+          "name": "alert_deliveries_watch_order_positive",
+          "value": "\"alert_deliveries\".\"watch_activation_order\" > 0"
+        },
+        "alert_deliveries_one_hour_expiry": {
+          "name": "alert_deliveries_one_hour_expiry",
+          "value": "\"alert_deliveries\".\"expires_at\" = \"alert_deliveries\".\"opened_at\" + interval '1 hour'"
+        },
+        "alert_deliveries_terminal_consistent": {
+          "name": "alert_deliveries_terminal_consistent",
+          "value": "num_nonnulls(\"alert_deliveries\".\"sent_at\", \"alert_deliveries\".\"cancelled_at\", \"alert_deliveries\".\"dead_lettered_at\") <= 1\n        and (\n          (\"alert_deliveries\".\"terminal_at\" is null and num_nonnulls(\"alert_deliveries\".\"sent_at\", \"alert_deliveries\".\"cancelled_at\", \"alert_deliveries\".\"dead_lettered_at\") = 0)\n          or\n          (\"alert_deliveries\".\"terminal_at\" is not null and num_nonnulls(\"alert_deliveries\".\"sent_at\", \"alert_deliveries\".\"cancelled_at\", \"alert_deliveries\".\"dead_lettered_at\") = 1)\n        )"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.class_state": {
+      "name": "class_state",
+      "schema": "",
+      "columns": {
+        "class_key": {
+          "name": "class_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "last_status": {
+          "name": "last_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_open_seats": {
+          "name": "last_open_seats",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "last_waitlist_open": {
+          "name": "last_waitlist_open",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_enrolled": {
+          "name": "last_enrolled",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_capacity": {
+          "name": "last_capacity",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_waitlisted": {
+          "name": "last_waitlisted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_waitlist_max": {
+          "name": "last_waitlist_max",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_open_reserved": {
+          "name": "last_open_reserved",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "state_version": {
+          "name": "state_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "observed_watch_order": {
+          "name": "observed_watch_order",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "nextval('watch_visibility_order_seq')"
+        },
+        "source_fresh_until": {
+          "name": "source_fresh_until",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp() + interval '120 seconds'"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "class_state_class_key_valid": {
+          "name": "class_state_class_key_valid",
+          "value": "\"class_state\".\"class_key\" ~ '^[0-9]{4}-(fall|spring|summer)-[a-z0-9]{1,32}-[a-z0-9]{1,32}-((?=[a-z0-9]{1,8}-)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})-[a-z]{2,8}-((?=[a-z0-9]{1,8}$)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})$'"
+        },
+        "class_state_status_valid": {
+          "name": "class_state_status_valid",
+          "value": "\"class_state\".\"last_status\" in ('open', 'waitlist', 'closed')"
+        },
+        "class_state_open_seats_nonnegative": {
+          "name": "class_state_open_seats_nonnegative",
+          "value": "\"class_state\".\"last_open_seats\" >= 0"
+        },
+        "class_state_open_reserved_subset": {
+          "name": "class_state_open_reserved_subset",
+          "value": "\"class_state\".\"last_open_reserved\" is null\n        or (\"class_state\".\"last_open_reserved\" >= 0 and \"class_state\".\"last_open_reserved\" <= \"class_state\".\"last_open_seats\")"
+        },
+        "class_state_display_name_valid": {
+          "name": "class_state_display_name_valid",
+          "value": "\"class_state\".\"display_name\" is null or char_length(\"class_state\".\"display_name\") between 1 and 256"
+        },
+        "class_state_enrolled_nonnegative": {
+          "name": "class_state_enrolled_nonnegative",
+          "value": "\"class_state\".\"last_enrolled\" is null or \"class_state\".\"last_enrolled\" >= 0"
+        },
+        "class_state_capacity_nonnegative": {
+          "name": "class_state_capacity_nonnegative",
+          "value": "\"class_state\".\"last_capacity\" is null or \"class_state\".\"last_capacity\" >= 0"
+        },
+        "class_state_waitlisted_nonnegative": {
+          "name": "class_state_waitlisted_nonnegative",
+          "value": "\"class_state\".\"last_waitlisted\" is null or \"class_state\".\"last_waitlisted\" >= 0"
+        },
+        "class_state_waitlist_max_nonnegative": {
+          "name": "class_state_waitlist_max_nonnegative",
+          "value": "\"class_state\".\"last_waitlist_max\" is null or \"class_state\".\"last_waitlist_max\" >= 0"
+        },
+        "class_state_version_nonnegative": {
+          "name": "class_state_version_nonnegative",
+          "value": "\"class_state\".\"state_version\" >= 0"
+        },
+        "class_state_observed_order_positive": {
+          "name": "class_state_observed_order_positive",
+          "value": "\"class_state\".\"observed_watch_order\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.dead_letter_incidents": {
+      "name": "dead_letter_incidents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "mail_job_id": {
+          "name": "mail_job_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'unresolved'"
+        },
+        "opened_at": {
+          "name": "opened_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        },
+        "surfaced_at": {
+          "name": "surfaced_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "acknowledged_at": {
+          "name": "acknowledged_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "dead_letter_incidents_unresolved_idx": {
+          "name": "dead_letter_incidents_unresolved_idx",
+          "columns": [
+            {
+              "expression": "opened_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"dead_letter_incidents\".\"state\" = 'unresolved'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "dead_letter_incidents_unsurfaced_idx": {
+          "name": "dead_letter_incidents_unsurfaced_idx",
+          "columns": [
+            {
+              "expression": "opened_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"dead_letter_incidents\".\"surfaced_at\" is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "dead_letter_incidents_mail_job_id_mail_outbox_id_fk": {
+          "name": "dead_letter_incidents_mail_job_id_mail_outbox_id_fk",
+          "tableFrom": "dead_letter_incidents",
+          "tableTo": "mail_outbox",
+          "columnsFrom": [
+            "mail_job_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "dead_letter_incidents_mail_job_id_unique": {
+          "name": "dead_letter_incidents_mail_job_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "mail_job_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "dead_letter_incidents_state_valid": {
+          "name": "dead_letter_incidents_state_valid",
+          "value": "\"dead_letter_incidents\".\"state\" in ('unresolved', 'acknowledged', 'resolved')"
+        },
+        "dead_letter_incidents_state_consistent": {
+          "name": "dead_letter_incidents_state_consistent",
+          "value": "(\n          \"dead_letter_incidents\".\"state\" = 'unresolved'\n          and \"dead_letter_incidents\".\"acknowledged_at\" is null\n          and \"dead_letter_incidents\".\"resolved_at\" is null\n        ) or (\n          \"dead_letter_incidents\".\"state\" = 'acknowledged'\n          and \"dead_letter_incidents\".\"acknowledged_at\" is not null\n          and \"dead_letter_incidents\".\"resolved_at\" is null\n        ) or (\n          \"dead_letter_incidents\".\"state\" = 'resolved'\n          and \"dead_letter_incidents\".\"resolved_at\" is not null\n        )"
+        },
+        "dead_letter_incidents_timestamps_ordered": {
+          "name": "dead_letter_incidents_timestamps_ordered",
+          "value": "(\"dead_letter_incidents\".\"surfaced_at\" is null or \"dead_letter_incidents\".\"surfaced_at\" >= \"dead_letter_incidents\".\"opened_at\")\n        and (\"dead_letter_incidents\".\"acknowledged_at\" is null or \"dead_letter_incidents\".\"acknowledged_at\" >= \"dead_letter_incidents\".\"opened_at\")\n        and (\"dead_letter_incidents\".\"resolved_at\" is null or \"dead_letter_incidents\".\"resolved_at\" >= \"dead_letter_incidents\".\"opened_at\")\n        and (\n          \"dead_letter_incidents\".\"acknowledged_at\" is null\n          or \"dead_letter_incidents\".\"resolved_at\" is null\n          or \"dead_letter_incidents\".\"resolved_at\" >= \"dead_letter_incidents\".\"acknowledged_at\"\n        )"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.mail_outbox": {
+      "name": "mail_outbox",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subscriber_id": {
+          "name": "subscriber_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "class_key": {
+          "name": "class_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "opened_at": {
+          "name": "opened_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'queued'"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "available_at": {
+          "name": "available_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimed_at": {
+          "name": "claimed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claim_token": {
+          "name": "claim_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terminal_at": {
+          "name": "terminal_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "terminal_reason": {
+          "name": "terminal_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_idempotency_key": {
+          "name": "provider_idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provider_message_id": {
+          "name": "provider_message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "provider_accepted_at": {
+          "name": "provider_accepted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_error_code": {
+          "name": "last_error_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "payload": {
+          "name": "payload",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        }
+      },
+      "indexes": {
+        "mail_outbox_alert_logical_uq": {
+          "name": "mail_outbox_alert_logical_uq",
+          "columns": [
+            {
+              "expression": "subscriber_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "class_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "opened_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"mail_outbox\".\"kind\" = 'alert'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mail_outbox_claimable_idx": {
+          "name": "mail_outbox_claimable_idx",
+          "columns": [
+            {
+              "expression": "available_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"mail_outbox\".\"status\" = 'queued'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mail_outbox_processing_lease_idx": {
+          "name": "mail_outbox_processing_lease_idx",
+          "columns": [
+            {
+              "expression": "claimed_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"mail_outbox\".\"status\" = 'processing'",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mail_outbox_subscriber_idx": {
+          "name": "mail_outbox_subscriber_idx",
+          "columns": [
+            {
+              "expression": "subscriber_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mail_outbox_class_idx": {
+          "name": "mail_outbox_class_idx",
+          "columns": [
+            {
+              "expression": "class_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mail_outbox_terminal_idx": {
+          "name": "mail_outbox_terminal_idx",
+          "columns": [
+            {
+              "expression": "terminal_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"mail_outbox\".\"terminal_at\" is not null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "mail_outbox_subscriber_id_subscribers_id_fk": {
+          "name": "mail_outbox_subscriber_id_subscribers_id_fk",
+          "tableFrom": "mail_outbox",
+          "tableTo": "subscribers",
+          "columnsFrom": [
+            "subscriber_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "mail_outbox_provider_idempotency_uq": {
+          "name": "mail_outbox_provider_idempotency_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "provider_idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "mail_outbox_kind_valid": {
+          "name": "mail_outbox_kind_valid",
+          "value": "\"mail_outbox\".\"kind\" in ('alert', 'confirmation', 'manage-link', 'operator')"
+        },
+        "mail_outbox_status_valid": {
+          "name": "mail_outbox_status_valid",
+          "value": "\"mail_outbox\".\"status\" in ('queued', 'processing', 'sent', 'cancelled', 'dead_letter')"
+        },
+        "mail_outbox_terminal_reason_valid": {
+          "name": "mail_outbox_terminal_reason_valid",
+          "value": "\"mail_outbox\".\"terminal_reason\" is null or \"mail_outbox\".\"terminal_reason\" in (\n        'opening-closed',\n        'expired',\n        'permanent-failure',\n        'retry-horizon',\n        'subscriber-ineligible',\n        'suppressed'\n      )"
+        },
+        "mail_outbox_class_key_valid": {
+          "name": "mail_outbox_class_key_valid",
+          "value": "\"mail_outbox\".\"class_key\" is null or \"mail_outbox\".\"class_key\" ~ '^[0-9]{4}-(fall|spring|summer)-[a-z0-9]{1,32}-[a-z0-9]{1,32}-((?=[a-z0-9]{1,8}-)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})-[a-z]{2,8}-((?=[a-z0-9]{1,8}$)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})$'"
+        },
+        "mail_outbox_shape_valid": {
+          "name": "mail_outbox_shape_valid",
+          "value": "(\n          \"mail_outbox\".\"kind\" = 'alert'\n          and (\"mail_outbox\".\"subscriber_id\" is not null or \"mail_outbox\".\"status\" = 'dead_letter')\n          and \"mail_outbox\".\"class_key\" is not null\n          and \"mail_outbox\".\"opened_at\" is not null\n          and \"mail_outbox\".\"reason\" is not null\n          and \"mail_outbox\".\"expires_at\" = \"mail_outbox\".\"opened_at\" + interval '1 hour'\n        ) or (\n          \"mail_outbox\".\"kind\" in ('confirmation', 'manage-link')\n          and (\"mail_outbox\".\"subscriber_id\" is not null or \"mail_outbox\".\"status\" = 'dead_letter')\n          and \"mail_outbox\".\"class_key\" is null\n          and \"mail_outbox\".\"opened_at\" is null\n          and \"mail_outbox\".\"reason\" is null\n          and \"mail_outbox\".\"expires_at\" is null\n        ) or (\n          \"mail_outbox\".\"kind\" = 'operator'\n          and \"mail_outbox\".\"subscriber_id\" is null\n          and \"mail_outbox\".\"opened_at\" is null\n          and \"mail_outbox\".\"reason\" is null\n          and \"mail_outbox\".\"expires_at\" is null\n        )"
+        },
+        "mail_outbox_reason_valid": {
+          "name": "mail_outbox_reason_valid",
+          "value": "\"mail_outbox\".\"reason\" is null or \"mail_outbox\".\"reason\" in ('seats-open', 'waitlist-open')"
+        },
+        "mail_outbox_attempts_nonnegative": {
+          "name": "mail_outbox_attempts_nonnegative",
+          "value": "\"mail_outbox\".\"attempts\" >= 0"
+        },
+        "mail_outbox_claim_consistent": {
+          "name": "mail_outbox_claim_consistent",
+          "value": "(\n          \"mail_outbox\".\"status\" = 'queued'\n          and \"mail_outbox\".\"claimed_at\" is null\n          and \"mail_outbox\".\"claim_token\" is null\n          and \"mail_outbox\".\"sent_at\" is null\n          and \"mail_outbox\".\"terminal_at\" is null\n          and \"mail_outbox\".\"terminal_reason\" is null\n        ) or (\n          \"mail_outbox\".\"status\" = 'processing'\n          and \"mail_outbox\".\"claimed_at\" is not null\n          and \"mail_outbox\".\"claim_token\" is not null\n          and \"mail_outbox\".\"sent_at\" is null\n          and \"mail_outbox\".\"terminal_at\" is null\n          and \"mail_outbox\".\"terminal_reason\" is null\n        ) or (\n          \"mail_outbox\".\"status\" = 'sent'\n          and \"mail_outbox\".\"claimed_at\" is null\n          and \"mail_outbox\".\"claim_token\" is null\n          and \"mail_outbox\".\"sent_at\" is not null\n          and \"mail_outbox\".\"terminal_at\" is not null\n          and \"mail_outbox\".\"terminal_reason\" is null\n          and \"mail_outbox\".\"provider_accepted_at\" is not null\n        ) or (\n          \"mail_outbox\".\"status\" in ('cancelled', 'dead_letter')\n          and \"mail_outbox\".\"claimed_at\" is null\n          and \"mail_outbox\".\"claim_token\" is null\n          and \"mail_outbox\".\"sent_at\" is null\n          and \"mail_outbox\".\"terminal_at\" is not null\n          and \"mail_outbox\".\"terminal_reason\" is not null\n        )"
+        },
+        "mail_outbox_provider_key_bounded": {
+          "name": "mail_outbox_provider_key_bounded",
+          "value": "char_length(\"mail_outbox\".\"provider_idempotency_key\") between 1 and 256"
+        },
+        "mail_outbox_provider_metadata_bounded": {
+          "name": "mail_outbox_provider_metadata_bounded",
+          "value": "(\"mail_outbox\".\"provider_message_id\" is null or char_length(\"mail_outbox\".\"provider_message_id\") <= 512)\n        and (\"mail_outbox\".\"last_error_code\" is null or char_length(\"mail_outbox\".\"last_error_code\") <= 128)"
+        },
+        "mail_outbox_payload_bounded": {
+          "name": "mail_outbox_payload_bounded",
+          "value": "jsonb_typeof(\"mail_outbox\".\"payload\") = 'object' and pg_column_size(\"mail_outbox\".\"payload\") <= 8192"
+        },
+        "mail_outbox_updated_after_creation": {
+          "name": "mail_outbox_updated_after_creation",
+          "value": "\"mail_outbox\".\"updated_at\" >= \"mail_outbox\".\"created_at\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.parser_health": {
+      "name": "parser_health",
+      "schema": "",
+      "columns": {
+        "class_key": {
+          "name": "class_key",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "episode_started_at": {
+          "name": "episode_started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "alert_enqueued_at": {
+          "name": "alert_enqueued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recovered_at": {
+          "name": "recovered_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "parser_health_class_key_valid": {
+          "name": "parser_health_class_key_valid",
+          "value": "\"parser_health\".\"class_key\" ~ '^[0-9]{4}-(fall|spring|summer)-[a-z0-9]{1,32}-[a-z0-9]{1,32}-((?=[a-z0-9]{1,8}-)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})-[a-z]{2,8}-((?=[a-z0-9]{1,8}$)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})$'"
+        },
+        "parser_health_status_valid": {
+          "name": "parser_health_status_valid",
+          "value": "\"parser_health\".\"status\" in ('healthy', 'broken')"
+        },
+        "parser_health_state_consistent": {
+          "name": "parser_health_state_consistent",
+          "value": "(\n          \"parser_health\".\"status\" = 'broken'\n          and \"parser_health\".\"episode_started_at\" is not null\n          and \"parser_health\".\"alert_enqueued_at\" is not null\n          and \"parser_health\".\"recovered_at\" is null\n          and \"parser_health\".\"alert_enqueued_at\" >= \"parser_health\".\"episode_started_at\"\n          and \"parser_health\".\"updated_at\" >= \"parser_health\".\"alert_enqueued_at\"\n        ) or (\n          \"parser_health\".\"status\" = 'healthy'\n          and \"parser_health\".\"episode_started_at\" is not null\n          and \"parser_health\".\"alert_enqueued_at\" is not null\n          and \"parser_health\".\"recovered_at\" is not null\n          and \"parser_health\".\"alert_enqueued_at\" >= \"parser_health\".\"episode_started_at\"\n          and \"parser_health\".\"recovered_at\" >= \"parser_health\".\"alert_enqueued_at\"\n          and \"parser_health\".\"updated_at\" >= \"parser_health\".\"recovered_at\"\n        )"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.push_subscriptions": {
+      "name": "push_subscriptions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "subscriber_id": {
+          "name": "subscriber_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "endpoint": {
+          "name": "endpoint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "p256dh": {
+          "name": "p256dh",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "auth": {
+          "name": "auth",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "push_subscriptions_subscriber_idx": {
+          "name": "push_subscriptions_subscriber_idx",
+          "columns": [
+            {
+              "expression": "subscriber_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "push_subscriptions_subscriber_id_subscribers_id_fk": {
+          "name": "push_subscriptions_subscriber_id_subscribers_id_fk",
+          "tableFrom": "push_subscriptions",
+          "tableTo": "subscribers",
+          "columnsFrom": [
+            "subscriber_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "push_subscriptions_endpoint_uq": {
+          "name": "push_subscriptions_endpoint_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "endpoint"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "push_subscriptions_https_endpoint": {
+          "name": "push_subscriptions_https_endpoint",
+          "value": "char_length(\"push_subscriptions\".\"endpoint\") <= 2048 and \"push_subscriptions\".\"endpoint\" ~ '^https://[^[:space:]]+$'"
+        },
+        "push_subscriptions_keys_bounded": {
+          "name": "push_subscriptions_keys_bounded",
+          "value": "char_length(\"push_subscriptions\".\"p256dh\") between 1 and 512 and char_length(\"push_subscriptions\".\"auth\") between 1 and 512"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.subscribers": {
+      "name": "subscribers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "confirmed_at": {
+          "name": "confirmed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "subscribers_email_unique": {
+          "name": "subscribers_email_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "email"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "subscribers_email_normalized_berkeley": {
+          "name": "subscribers_email_normalized_berkeley",
+          "value": "\"subscribers\".\"email\" = lower(btrim(\"subscribers\".\"email\"))\n        and char_length(\"subscribers\".\"email\") <= 254\n        and \"subscribers\".\"email\" ~ '^[^+[:space:]@]+@berkeley[.]edu$'"
+        },
+        "subscribers_confirmation_after_creation": {
+          "name": "subscribers_confirmation_after_creation",
+          "value": "\"subscribers\".\"confirmed_at\" is null or \"subscribers\".\"confirmed_at\" >= \"subscribers\".\"created_at\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.suppressions": {
+      "name": "suppressions",
+      "schema": "",
+      "columns": {
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "suppressions_email_normalized": {
+          "name": "suppressions_email_normalized",
+          "value": "\"suppressions\".\"email\" = lower(btrim(\"suppressions\".\"email\"))\n        and char_length(\"suppressions\".\"email\") <= 254\n        and \"suppressions\".\"email\" ~ '^[^[:space:]@]+@[^[:space:]@]+$'"
+        },
+        "suppressions_reason_valid": {
+          "name": "suppressions_reason_valid",
+          "value": "\"suppressions\".\"reason\" in ('bounce', 'complaint')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.watches": {
+      "name": "watches",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "subscriber_id": {
+          "name": "subscriber_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "class_key": {
+          "name": "class_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "retired_at": {
+          "name": "retired_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "activated_at": {
+          "name": "activated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "activation_order": {
+          "name": "activation_order",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "watches_class_key_idx": {
+          "name": "watches_class_key_idx",
+          "columns": [
+            {
+              "expression": "class_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "watches_subscriber_id_subscribers_id_fk": {
+          "name": "watches_subscriber_id_subscribers_id_fk",
+          "tableFrom": "watches",
+          "tableTo": "subscribers",
+          "columnsFrom": [
+            "subscriber_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "watches_subscriber_class_uq": {
+          "name": "watches_subscriber_class_uq",
+          "nullsNotDistinct": false,
+          "columns": [
+            "subscriber_id",
+            "class_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "watches_class_key_valid": {
+          "name": "watches_class_key_valid",
+          "value": "\"watches\".\"class_key\" ~ '^[0-9]{4}-(fall|spring|summer)-[a-z0-9]{1,32}-[a-z0-9]{1,32}-((?=[a-z0-9]{1,8}-)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})-[a-z]{2,8}-((?=[a-z0-9]{1,8}$)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})$'"
+        },
+        "watches_activation_consistent": {
+          "name": "watches_activation_consistent",
+          "value": "(\"watches\".\"activated_at\" is null and \"watches\".\"activation_order\" is null)\n        or (\"watches\".\"activated_at\" is not null and \"watches\".\"activation_order\" > 0)"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {
+    "public.watch_visibility_order_seq": {
+      "name": "watch_visibility_order_seq",
+      "schema": "public",
+      "increment": "1",
+      "startWith": "1",
+      "minValue": "1",
+      "maxValue": "9223372036854775807",
+      "cache": "1",
+      "cycle": false
+    }
+  },
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

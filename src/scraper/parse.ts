@@ -33,6 +33,7 @@ const MAX_DISPLAY_NAME_LENGTH = 256;
 
 const FIELD_LABELS = {
   openSeats: 'total open seats',
+  openReserved: 'open reserved seats',
   enrolled: 'enrolled',
   capacity: 'capacity',
   waitlisted: 'waitlisted',
@@ -138,6 +139,7 @@ export function parseClassPage(
     capacity: extractOptionalCount(enrollment, FIELD_LABELS.capacity),
     waitlisted: persistedCountOrNull(waitlisted),
     waitlistMax: persistedCountOrNull(waitlistMax),
+    openReserved: extractOpenReserved(enrollment, openSeats),
   };
 }
 
@@ -263,6 +265,72 @@ function extractOptionalCount(region: HtmlNode, expectedLabel: string): number |
   if (!extracted.ok) return null;
   const parsed = parseSafeInteger(extracted.value, false);
   return parsed === null ? null : persistedCountOrNull(parsed);
+}
+
+/**
+ * Extract the optional reserved-seat observation from its distinct live-page
+ * shape: one label-only div followed by one or more reservation-detail divs.
+ *
+ * Multiple contiguous details are summed because each published group
+ * contributes to the one "Open Reserved Seats" observation. The entire field
+ * degrades to unknown if any group is unrecognized, another details container
+ * makes the association ambiguous, the sum cannot be stored safely, or the
+ * result would violate the contract invariant that reserved seats are a subset
+ * of total open seats. None of those display-only failures can break polling.
+ */
+function extractOpenReserved(region: HtmlNode, openSeats: number): number | null {
+  try {
+    const labels = region
+      .querySelectorAll('strong')
+      .filter((node) => normalizeLabel(node.text) === FIELD_LABELS.openReserved);
+    if (labels.length !== 1) return null;
+
+    const labelContainer = labels[0].parentNode;
+    if (
+      !labelContainer.matches('div') ||
+      normalizeLabel(labelContainer.text) !== FIELD_LABELS.openReserved
+    ) {
+      return null;
+    }
+
+    const details: HtmlNode[] = [];
+    let sibling = labelContainer.nextElementSibling;
+    while (sibling?.matches('div.details')) {
+      details.push(sibling);
+      sibling = sibling.nextElementSibling;
+    }
+    if (details.length === 0) return null;
+
+    const scopedDetails = region.querySelectorAll('div.details');
+    if (
+      scopedDetails.length !== details.length ||
+      scopedDetails.some((detail, index) => detail !== details[index])
+    ) {
+      return null;
+    }
+
+    let total = 0;
+    for (const detail of details) {
+      const numerals = detail.querySelectorAll('span.detail-numeral');
+      if (numerals.length !== 1) return null;
+
+      const numeral = normalizeDisplayText(numerals[0].text);
+      const count = parseSafeInteger(numeral, false);
+      if (count === null || count > MAX_OBSERVED_COUNT) return null;
+
+      const detailText = normalizeDisplayText(detail.text);
+      if (!detailText.startsWith(numeral)) return null;
+      const reservationGroup = detailText.slice(numeral.length).trim();
+      if (!/^reserved for .+$/i.test(reservationGroup)) return null;
+
+      if (count > MAX_OBSERVED_COUNT - total) return null;
+      total += count;
+    }
+
+    return total <= openSeats ? total : null;
+  } catch {
+    return null;
+  }
 }
 
 function persistedCountOrNull(value: number): number | null {

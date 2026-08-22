@@ -17,6 +17,8 @@ import {
   SeatStateSchema,
   ParserBrokeSchema,
   PARSER_BROKE,
+  NotifyEventSchema,
+  PushAlertPayloadSchema,
   SEAT_STATUSES,
   SeatStatusSchema,
 } from '../../src/shared/seat-state';
@@ -236,6 +238,18 @@ describe('SeatStateSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('enforces openReserved as an optional subset of openSeats', () => {
+    expect(
+      SeatStateSchema.safeParse(makeSeatState({ openSeats: 2, openReserved: 3 })).success,
+    ).toBe(false);
+    expect(
+      SeatStateSchema.safeParse(makeSeatState({ openSeats: 2, openReserved: 2 })).success,
+    ).toBe(true);
+    expect(
+      SeatStateSchema.safeParse(makeSeatState({ openSeats: 2, openReserved: null })).success,
+    ).toBe(true);
+  });
+
   it('rejects an unknown status value', () => {
     const result = SeatStateSchema.safeParse(makeSeatState({ status: 'unknown' as any }));
     expect(result.success).toBe(false);
@@ -256,6 +270,36 @@ describe('SeatStateSchema', () => {
   it('rejects missing waitlistOpen field', () => {
     const { waitlistOpen: _omit, ...rest } = makeSeatState();
     expect(SeatStateSchema.safeParse(rest).success).toBe(false);
+  });
+});
+
+describe('reserved-seat alert contracts', () => {
+  const notifyEvent = {
+    subscriberId: 'sub-1',
+    email: 'student@berkeley.edu',
+    classKey: '2026-fall-compsci-189-001-lec-001',
+    reason: 'seats-open',
+    openSeats: 2,
+    openedAt: '2026-08-21T22:19:15.592Z',
+  } as const;
+
+  it('enforces the subset invariant on NotifyEvent', () => {
+    expect(NotifyEventSchema.safeParse({ ...notifyEvent, openReserved: 3 }).success).toBe(false);
+    expect(NotifyEventSchema.safeParse({ ...notifyEvent, openReserved: 2 }).success).toBe(true);
+    expect(NotifyEventSchema.safeParse({ ...notifyEvent, openReserved: null }).success).toBe(true);
+  });
+
+  it('enforces the subset invariant on PushAlertPayload', () => {
+    const pushPayload = { ...notifyEvent, kind: 'alert' };
+    expect(PushAlertPayloadSchema.safeParse({ ...pushPayload, openReserved: 3 }).success).toBe(
+      false,
+    );
+    expect(PushAlertPayloadSchema.safeParse({ ...pushPayload, openReserved: 2 }).success).toBe(
+      true,
+    );
+    expect(PushAlertPayloadSchema.safeParse({ ...pushPayload, openReserved: null }).success).toBe(
+      true,
+    );
   });
 });
 

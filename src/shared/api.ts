@@ -147,60 +147,87 @@ export type ConfirmSubscriptionResponse = z.infer<typeof ConfirmSubscriptionResp
  * changed. `sourceStale` is therefore true for a new watch and whenever that
  * successful observation ages past the configured worker freshness threshold.
  */
-export const WatchFreshnessSchema = z.object({
-  classKey: ClassKeySchema,
-  source: z.literal('public-class-page'),
-  lastCheckedAt: z.string().datetime().nullable(),
-  sourceStale: z.boolean(),
+export const WatchFreshnessSchema = z
+  .object({
+    classKey: ClassKeySchema,
+    source: z.literal('public-class-page'),
+    lastCheckedAt: z.string().datetime().nullable(),
+    sourceStale: z.boolean(),
 
-  // --- Dashboard observations (owner decision, 2026-07-30) -------------------
-  // One box per live watch shows the class name, open seats out of total, open
-  // waitlist slots out of total, and a link to the official page, so the student
-  // can decide what to stop watching and free one of their four slots.
-  //
-  // Every field below is REQUIRED-BUT-NULLABLE: the key is always present and
-  // `null` means "not observed yet". These are LEFT-joined from `class_state`,
-  // so a watch whose class has never been polled has no row at all and every
-  // value here is null — that is a normal new watch, not an error. Nullable
-  // rather than optional so the compiler forces each producer to decide; an
-  // omittable field turns a forgetful producer into a silently blank box.
-  //
-  // Display-only. NONE of these is ever an identity input, a lookup key, or part
-  // of a ClassKey. The official class URL is DERIVED from `classKey`, never
-  // stored per row and never taken from the page.
+    // --- Dashboard observations (owner decision, 2026-07-30) -------------------
+    // One box per live watch shows the class name, open seats out of total, open
+    // waitlist slots out of total, and a link to the official page, so the student
+    // can decide what to stop watching and free one of their four slots.
+    //
+    // Every field below is REQUIRED-BUT-NULLABLE: the key is always present and
+    // `null` means "not observed yet". These are LEFT-joined from `class_state`,
+    // so a watch whose class has never been polled has no row at all and every
+    // value here is null — that is a normal new watch, not an error. Nullable
+    // rather than optional so the compiler forces each producer to decide; an
+    // omittable field turns a forgetful producer into a silently blank box.
+    //
+    // Display-only. NONE of these is ever an identity input, a lookup key, or part
+    // of a ClassKey. The official class URL is DERIVED from `classKey`, never
+    // stored per row and never taken from the page.
 
-  /** Human-readable class name from the page heading, e.g. "COMPSCI 189 001 - LEC 001". */
-  displayName: z.string().min(1).max(256).nullable(),
-  /** Open general-enrollment seats. Pair with `capacity` to render "3 of 350". */
-  openSeats: z.number().int().nonnegative().nullable(),
-  /** Students currently enrolled. */
-  enrolled: z.number().int().nonnegative().nullable(),
-  /** Total general-enrollment capacity — the denominator for `openSeats`. */
-  capacity: z.number().int().nonnegative().nullable(),
+    /** Human-readable class name from the page heading, e.g. "COMPSCI 189 001 - LEC 001". */
+    displayName: z.string().min(1).max(256).nullable(),
+    /** TOTAL open seats, reserved ones included. Pair with `capacity` for "3 of 350". */
+    openSeats: z.number().int().nonnegative().nullable(),
+    /** Students currently enrolled. */
+    enrolled: z.number().int().nonnegative().nullable(),
+    /** Total section capacity — the denominator for `openSeats`. Not general-only. */
+    capacity: z.number().int().nonnegative().nullable(),
+    /**
+     * Students currently QUEUED on the waitlist. This is NOT a count of open
+     * waitlist slots — it is how many people are already in line. Open slots are
+     * `waitlistMax - waitlisted`; rendering `waitlisted` as "open" inverts the
+     * meaning and reports a FULL waitlist as wide open. See `waitlistOpen`.
+     */
+    waitlisted: z.number().int().nonnegative().nullable(),
+    /** Maximum waitlist size — the denominator for open waitlist slots. */
+    waitlistMax: z.number().int().nonnegative().nullable(),
+    /**
+     * Of `openSeats`, how many are RESERVED for a Reservation Group. A SUBSET of
+     * `openSeats`, never an addition — `openSeats: 41` with `openReserved: 41` means
+     * every open seat is reserved and a student without that permission can take none
+     * of them. That exact snapshot was observed live on 2026-08-21.
+     *
+     * The dashboard MUST surface this rather than showing a bare open count: "41 open
+     * (all reserved)" is honest, "41 open" is not. Alerting is deliberately NOT gated
+     * on it (owner ruling 2026-08-22) — a reserved seat is real to whoever holds the
+     * permission, and suppressing would cost them the alert.
+     *
+     * `null` means the page published no reserved line, which is NOT the same as zero
+     * reserved. Render the plain count in that case; never infer 0.
+     */
+    openReserved: z.number().int().nonnegative().nullable(),
+    /**
+     * Whether the waitlist is accepting movement (`waitlistMax > 0 && waitlisted <
+     * waitlistMax`).
+     *
+     * Invariant the UI and tests must hold, stated as an IMPLICATION and not a
+     * biconditional: a rendered open-waitlist count > 0 IMPLIES this is true. The
+     * converse does NOT hold and must not be tested as one — `true` with either
+     * count null renders a dash, and `null` renders a dash whatever the counts say,
+     * because a row written before these columns existed knows the flag but not the
+     * numbers. `false` renders 0 regardless of the arithmetic: this field is what
+     * the alerting path derives from, so a box claiming spots while it is false
+     * would promise availability that never produces an alert.
+     */
+    waitlistOpen: z.boolean().nullable(),
+  })
   /**
-   * Students currently QUEUED on the waitlist. This is NOT a count of open
-   * waitlist slots — it is how many people are already in line. Open slots are
-   * `waitlistMax - waitlisted`; rendering `waitlisted` as "open" inverts the
-   * meaning and reports a FULL waitlist as wide open. See `waitlistOpen`.
+   * Same subset rule the producer enforces (`SeatStateSchema`), restated here
+   * because this shape has SEVERAL producers and a client that renders it. A wire
+   * payload claiming more reserved seats than open ones would make the dashboard
+   * print "2 open (3 reserved)"; rejecting it at the boundary means the client
+   * never has to defend against a state the server should not send.
    */
-  waitlisted: z.number().int().nonnegative().nullable(),
-  /** Maximum waitlist size — the denominator for open waitlist slots. */
-  waitlistMax: z.number().int().nonnegative().nullable(),
-  /**
-   * Whether the waitlist is accepting movement (`waitlistMax > 0 && waitlisted <
-   * waitlistMax`).
-   *
-   * Invariant the UI and tests must hold, stated as an IMPLICATION and not a
-   * biconditional: a rendered open-waitlist count > 0 IMPLIES this is true. The
-   * converse does NOT hold and must not be tested as one — `true` with either
-   * count null renders a dash, and `null` renders a dash whatever the counts say,
-   * because a row written before these columns existed knows the flag but not the
-   * numbers. `false` renders 0 regardless of the arithmetic: this field is what
-   * the alerting path derives from, so a box claiming spots while it is false
-   * would promise availability that never produces an alert.
-   */
-  waitlistOpen: z.boolean().nullable(),
-});
+  .refine((watch) => (watch.openReserved ?? 0) <= (watch.openSeats ?? 0), {
+    message: 'openReserved cannot exceed openSeats; it counts a subset of them',
+    path: ['openReserved'],
+  });
 export type WatchFreshness = z.infer<typeof WatchFreshnessSchema>;
 
 /**

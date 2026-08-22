@@ -13,6 +13,7 @@ import {
   deadLetterMailJob,
   enqueueOperatorMail,
   getMailOutboxHealth,
+  getClassState,
   getSubscriberByEmail,
   mailOutbox,
   makeRepo,
@@ -22,8 +23,17 @@ import {
   subscribers,
   type Db,
 } from '../../src/db';
-import { createMailDispatcher, type MailDispatcher, type ProviderOutcome } from '../../src/notify';
-import type { AvailabilitySource, SourceCacheMetadata } from '../../src/scraper';
+import {
+  createMailDispatcher,
+  createNoopTransport,
+  type MailDispatcher,
+  type ProviderOutcome,
+} from '../../src/notify';
+import type {
+  AvailabilityObservation,
+  AvailabilitySource,
+  SourceCacheMetadata,
+} from '../../src/scraper';
 import { readWorkerReadiness } from '../../src/server/worker-readiness';
 import type { ClassKey } from '../../src/shared/class-key';
 import type { ParseResult } from '../../src/shared/seat-state';
@@ -110,6 +120,16 @@ function cacheAt(checkedAt: string): SourceCacheMetadata {
 function sourceReturning(
   checkedAt: string,
   resultFor: (classKey: ClassKey) => ParseResult,
+): ReturnType<typeof sourceObserving> {
+  return sourceObserving((classKey) => ({
+    kind: 'result',
+    result: resultFor(classKey),
+    cache: cacheAt(checkedAt),
+  }));
+}
+
+function sourceObserving(
+  observationFor: (classKey: ClassKey) => AvailabilityObservation,
 ): AvailabilitySource & {
   beginCycle: ReturnType<typeof vi.fn>;
   endCycle: ReturnType<typeof vi.fn>;
@@ -123,11 +143,7 @@ function sourceReturning(
     const started = await runWithPermit(
       { kind: 'class', signal: new AbortController().signal },
       () => ({
-        started: Promise.resolve({
-          kind: 'result' as const,
-          result: resultFor(classKey),
-          cache: cacheAt(checkedAt),
-        }),
+        started: Promise.resolve(observationFor(classKey)),
       }),
     );
     return started.started;
@@ -240,6 +256,151 @@ describe('v0.4.2 durable parser-broke episodes (AC-15)', () => {
         recoveredAt: null,
       }),
     ]);
+  });
+});
+
+describe('FR-27 reserved-only openings remain alertable', () => {
+  it.each([
+    {
+      name: 'all-reserved',
+      openReserved: 41,
+      expectedBody: 'ALL 41 of those seats are RESERVED',
+    },
+    {
+      name: 'unknown-reservation-count',
+      openReserved: null,
+      expectedBody: 'This page did not say how many are',
+    },
+    {
+      name: 'explicit-zero',
+      openReserved: 0,
+      expectedBody: undefined,
+    },
+  ] as const)(
+    'carries the $name snapshot through durable enqueue and the real renderer',
+    async ({ name, openReserved, expectedBody }) => {
+      const db = await makeTestDb();
+      const created = await makeRepo(db).createSubscriber(`${name}@berkeley.edu`, [CLASS_KEY]);
+      expect(await confirmSubscriber(db, created.id)).toBe('confirmed');
+
+      const baselineAt = '2030-08-21T20:00:00.000Z';
+      const openingAt = '2030-08-21T20:01:00.000Z';
+      await runReinstantiatedSourceCycle(db, baselineAt, (classKey) => ({
+        classKey,
+        status: 'closed',
+        openSeats: 0,
+        waitlistOpen: false,
+        fetchedAt: baselineAt,
+        openReserved: null,
+      }));
+
+      const opening = await runReinstantiatedSourceCycle(db, openingAt, (classKey) => ({
+        classKey,
+        status: 'open',
+        openSeats: 41,
+        waitlistOpen: false,
+        fetchedAt: openingAt,
+        openReserved,
+      }));
+
+      expect(opening.parserBroke).toEqual([]);
+      expect((await db.select().from(mailOutbox)).filter((job) => job.kind === 'alert')).toEqual([
+        expect.objectContaining({
+          subscriberId: created.id,
+          classKey: CLASS_KEY,
+          reason: 'seats-open',
+          payload: { openSeats: 41, openReserved },
+        }),
+      ]);
+      expect(await getClassState(db, CLASS_KEY)).toMatchObject({
+        lastOpenSeats: 41,
+        lastOpenReserved: openReserved,
+      });
+
+      const jobs = await claimMailJobs(db);
+      const alert = jobs.find((job) => job.kind === 'alert');
+      if (!alert) throw new Error('expected the reserved-opening Alert to be claimable');
+      expect(alert.payload).toEqual({ openSeats: 41, openReserved });
+
+      const dispatcher = createMailDispatcher({
+        transport: createNoopTransport(),
+        appBaseUrl: 'https://seats.example.com',
+        isSuppressed: async () => false,
+        mintToken: () => 'stable-test-token',
+        push: null,
+      });
+      await expect(dispatcher.dispatch(alert)).resolves.toMatchObject({ status: 'success' });
+      const rendered = dispatcher.outbox.find((entry) => entry.kind === 'alert');
+      expect(rendered).toBeDefined();
+      if (expectedBody) expect(rendered?.body).toContain(expectedBody);
+    },
+  );
+
+  it('preserves openReserved on a trusted 304 and clears it on a later 200 without the line', async () => {
+    const db = await makeTestDb();
+    const created = await makeRepo(db).createSubscriber('reserved-cache@berkeley.edu', [CLASS_KEY]);
+    expect(await confirmSubscriber(db, created.id)).toBe('confirmed');
+
+    const observedAt = '2026-08-21T20:00:00.000Z';
+    const notModifiedAt = '2026-08-21T20:02:00.000Z';
+    const absentAt = '2026-08-21T20:04:00.000Z';
+    const repo = createWorkerRepo(db);
+    const schedule = new SourceScheduleState();
+    const config = workerConfig();
+    const run = (source: AvailabilitySource, at: string) =>
+      runSourcePollCycle({
+        repo,
+        source,
+        mailDispatcher: unusedMailDispatcher(),
+        schedule,
+        maintenance: createMaintenanceState(),
+        config,
+        logger: logger(),
+        nowMs: () => Date.parse(at),
+        random: () => 0,
+        sleep: async () => undefined,
+      });
+
+    await run(
+      sourceReturning(observedAt, (classKey) => ({
+        classKey,
+        status: 'open',
+        openSeats: 41,
+        waitlistOpen: false,
+        fetchedAt: observedAt,
+        openReserved: 41,
+      })),
+      observedAt,
+    );
+
+    const previousCache = cacheAt(observedAt);
+    const notModified = sourceObserving((classKey) => ({
+      kind: 'not-modified',
+      classKey,
+      checkedAt: notModifiedAt,
+      cache: { ...previousCache, checkedAt: notModifiedAt, freshUntil: notModifiedAt },
+    }));
+    const notModifiedSummary = await run(notModified, notModifiedAt);
+    expect(notModifiedSummary.sourceNotModified).toBe(1);
+    expect(await getClassState(db, CLASS_KEY)).toMatchObject({
+      lastOpenSeats: 41,
+      lastOpenReserved: 41,
+    });
+
+    await run(
+      sourceReturning(absentAt, (classKey) => ({
+        classKey,
+        status: 'open',
+        openSeats: 41,
+        waitlistOpen: false,
+        fetchedAt: absentAt,
+      })),
+      absentAt,
+    );
+    expect(await getClassState(db, CLASS_KEY)).toMatchObject({
+      lastOpenSeats: 41,
+      lastOpenReserved: null,
+    });
   });
 });
 

@@ -390,6 +390,18 @@ button[type='button']:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * The reserved caveat rides inside the seat figure, deliberately smaller and
+ * dimmer than the number it qualifies: it must be readable without competing
+ * with the count, because the count is what the student scans for.
+ */
+.watch-card__caveat {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #6b3f00;
+  font-variant-numeric: normal;
+}
+
 .watch-card__actions {
   display: flex;
   align-items: center;

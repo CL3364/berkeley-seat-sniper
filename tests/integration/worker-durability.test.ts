@@ -555,6 +555,7 @@ describe('durable opening delivery', () => {
         openedAt,
         reason: 'seats-open' as const,
         openSeats: 1,
+        openReserved: null,
         createdAt: new Date(openedAt),
       }));
     const repo: WorkerRepo = {
@@ -576,6 +577,7 @@ describe('durable opening delivery', () => {
         lastCapacity: null,
         lastWaitlisted: null,
         lastWaitlistMax: null,
+        lastOpenReserved: null,
         stateVersion: 0,
         updatedAt: new Date('2026-07-21T00:00:00.000Z'),
       }),

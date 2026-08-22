@@ -8,7 +8,9 @@ import { SubscriberEmailSchema } from './email';
  * reported as `closed`/0 — it surfaces as a `parser-broke` ParseResult instead,
  * never as a SeatState).
  *
- *  - `open`     at least one general-enrollment seat is open (openSeats > 0).
+ *  - `open`     at least one seat is open (openSeats > 0). NOTE this counts TOTAL
+ *               open seats as the page publishes them, INCLUDING seats reserved for a
+ *               Reservation Group — see `openReserved`, which is a subset of this.
  *  - `waitlist` no open seats, but the waitlist is open / has movement.
  *  - `closed`   no open seats and the waitlist is not open.
  */
@@ -43,51 +45,84 @@ export const MAX_OBSERVED_COUNT = 2_147_483_647;
  * Produced by the scraper, consumed by the worker for transition detection
  * (FR-4/FR-5) and persisted into `class_state` (spec §5).
  */
-export const SeatStateSchema = z.object({
-  /** Canonical class this snapshot is for. */
-  classKey: ClassKeySchema,
-  /** Coarse availability bucket driving the alert decision. */
-  status: SeatStatusSchema,
+export const SeatStateSchema = z
+  .object({
+    /** Canonical class this snapshot is for. */
+    classKey: ClassKeySchema,
+    /** Coarse availability bucket driving the alert decision. */
+    status: SeatStatusSchema,
+    /**
+     * TOTAL count of open seats exactly as the page publishes it ("Total Open Seats"),
+     * INCLUDING any reserved for a Reservation Group — `openReserved` counts a subset
+     * of this, never an addition. Non-negative integer, bounded by
+     * {@link MAX_OBSERVED_COUNT} because storage is int4 NOT NULL — see that
+     * constant for why exceeding it is `parser-broke` rather than `null`.
+     */
+    openSeats: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT),
+    /** Whether the waitlist is currently open / accepting movement. */
+    waitlistOpen: z.boolean(),
+    /** When the source page was fetched (ISO-8601 UTC). Drives the p95 budget (§6). */
+    fetchedAt: z.string().datetime(),
+
+    // --- Dashboard observations (owner decision, 2026-07-30) -------------------
+    // Extra numbers the per-class dashboard box renders. They are OPTIONAL here,
+    // unlike their required-but-nullable counterparts on the wire
+    // (`WatchFreshnessSchema` in ./api). The asymmetry is deliberate: the wire shape
+    // has several producers and a client that renders a blank box on a missing
+    // field, so strictness buys real safety there. A SeatState has exactly ONE
+    // producer — `parseClassPage` — so the same strictness buys nothing and would
+    // churn every construction site in the tests.
+    //
+    // SAFETY-CRITICAL, and the whole reason these are not required: a missing or
+    // unreadable field here MUST NEVER produce `parser-broke`. A required field
+    // would turn a healthy page whose markup merely differs (a section type with no
+    // Capacity, say) into an operator page-out that ALSO suppresses that cycle's
+    // subscriber alerts — strictly worse than a missing number. Absent becomes
+    // undefined/null, the box renders a dash, the poll continues. The three fields
+    // above (openSeats, waitlistOpen and the counts behind them) keep their existing
+    // STRICT behavior and still yield `parser-broke` when absent or malformed.
+
+    /** Class name from the page heading. Display-only; never an identity or lookup key. */
+    displayName: z.string().min(1).max(256).nullish(),
+    /** Students currently enrolled. */
+    enrolled: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
+    /** Total section capacity — the denominator for `openSeats`. Not general-only. */
+    capacity: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
+    /** Students QUEUED on the waitlist — NOT a count of open slots. See ./api. */
+    waitlisted: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
+    /** Maximum waitlist size — the denominator for open waitlist slots. */
+    waitlistMax: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
+    /**
+     * Open seats RESERVED for a Reservation Group (major, class standing, enrollment
+     * permission, …), as published by the page. A SUBSET of `openSeats`, not an
+     * addition to it — the observed live page reported `Total Open Seats: 41` and
+     * `Open Reserved Seats: 41`, meaning every open seat was reserved.
+     *
+     * Why this matters (ADR 0006, corrected): without it the product cannot tell a
+     * seat a student can take from one they cannot, and would alert on both
+     * identically. The owner's ruling is to ALERT REGARDLESS (2026-08-22) — a
+     * reserved seat is real for whoever holds that permission — so this field does
+     * NOT gate alerting. It exists to make the dashboard and the alert HONEST about
+     * what kind of seat opened.
+     *
+     * It does NOT establish eligibility. There is no login, so we still cannot know
+     * whether a given Subscriber belongs to the group; that half of Plan 0006 stays
+     * blocked. Display it, never filter on it.
+     */
+    openReserved: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
+  })
   /**
-   * Count of open general-enrollment seats. Non-negative integer, bounded by
-   * {@link MAX_OBSERVED_COUNT} because storage is int4 NOT NULL — see that
-   * constant for why exceeding it is `parser-broke` rather than `null`.
+   * ENFORCE the subset rule rather than only documenting it. `openReserved` counts
+   * a portion OF `openSeats`, so `{ openSeats: 2, openReserved: 3 }` is not a
+   * pessimistic reading — it is an impossible page, and accepting it would let the
+   * dashboard render "2 open (3 reserved)" and the email claim more reserved seats
+   * than exist. The parser already degrades a non-subset shape to `null`; this makes
+   * the contract itself unable to express the broken state.
    */
-  openSeats: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT),
-  /** Whether the waitlist is currently open / accepting movement. */
-  waitlistOpen: z.boolean(),
-  /** When the source page was fetched (ISO-8601 UTC). Drives the p95 budget (§6). */
-  fetchedAt: z.string().datetime(),
-
-  // --- Dashboard observations (owner decision, 2026-07-30) -------------------
-  // Extra numbers the per-class dashboard box renders. They are OPTIONAL here,
-  // unlike their required-but-nullable counterparts on the wire
-  // (`WatchFreshnessSchema` in ./api). The asymmetry is deliberate: the wire shape
-  // has several producers and a client that renders a blank box on a missing
-  // field, so strictness buys real safety there. A SeatState has exactly ONE
-  // producer — `parseClassPage` — so the same strictness buys nothing and would
-  // churn every construction site in the tests.
-  //
-  // SAFETY-CRITICAL, and the whole reason these are not required: a missing or
-  // unreadable field here MUST NEVER produce `parser-broke`. A required field
-  // would turn a healthy page whose markup merely differs (a section type with no
-  // Capacity, say) into an operator page-out that ALSO suppresses that cycle's
-  // subscriber alerts — strictly worse than a missing number. Absent becomes
-  // undefined/null, the box renders a dash, the poll continues. The three fields
-  // above (openSeats, waitlistOpen and the counts behind them) keep their existing
-  // STRICT behavior and still yield `parser-broke` when absent or malformed.
-
-  /** Class name from the page heading. Display-only; never an identity or lookup key. */
-  displayName: z.string().min(1).max(256).nullish(),
-  /** Students currently enrolled. */
-  enrolled: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
-  /** Total general-enrollment capacity — the denominator for `openSeats`. */
-  capacity: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
-  /** Students QUEUED on the waitlist — NOT a count of open slots. See ./api. */
-  waitlisted: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
-  /** Maximum waitlist size — the denominator for open waitlist slots. */
-  waitlistMax: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
-});
+  .refine((state) => (state.openReserved ?? 0) <= state.openSeats, {
+    message: 'openReserved cannot exceed openSeats; it counts a subset of them',
+    path: ['openReserved'],
+  });
 export type SeatState = z.infer<typeof SeatStateSchema>;
 
 /** Discriminant tag for the parser-broke branch of {@link ParseResult}. */
@@ -174,26 +209,46 @@ export function isSeatState(r: ParseResult): r is SeatState {
 export const NOTIFY_REASONS = ['seats-open', 'waitlist-open'] as const;
 export type NotifyReason = (typeof NOTIFY_REASONS)[number];
 
-export const NotifyEventSchema = z.object({
-  /** Opaque subscriber id — never the email — to keep logs PII-free (§6/AC-8). */
-  subscriberId: z.string().min(1),
-  /** Delivery address for this event. PII: never logged (constitution). */
-  email: SubscriberEmailSchema,
-  /** Canonical class that opened. */
-  classKey: ClassKeySchema,
-  /** Which transition fired the alert. */
-  reason: z.enum(NOTIFY_REASONS),
-  /**
-   * Open seat count observed at the transition (for the message body). Bounded by
-   * {@link MAX_OBSERVED_COUNT}: `alert_deliveries.open_seats` is int4 NOT NULL, so
-   * this is a SECOND storage boundary with the same overflow failure as
-   * `class_state.last_open_seats`. The value originates from a bounded SeatState,
-   * so this is defence in depth rather than a distinct source of truth.
-   */
-  openSeats: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT),
-  /** When the opening was observed (ISO-8601 UTC); part of the idempotency key. */
-  openedAt: z.string().datetime(),
-});
+export const NotifyEventSchema = z
+  .object({
+    /** Opaque subscriber id — never the email — to keep logs PII-free (§6/AC-8). */
+    subscriberId: z.string().min(1),
+    /** Delivery address for this event. PII: never logged (constitution). */
+    email: SubscriberEmailSchema,
+    /** Canonical class that opened. */
+    classKey: ClassKeySchema,
+    /** Which transition fired the alert. */
+    reason: z.enum(NOTIFY_REASONS),
+    /**
+     * Open seat count observed at the transition (for the message body). Bounded by
+     * {@link MAX_OBSERVED_COUNT}: `alert_deliveries.open_seats` is int4 NOT NULL, so
+     * this is a SECOND storage boundary with the same overflow failure as
+     * `class_state.last_open_seats`. The value originates from a bounded SeatState,
+     * so this is defence in depth rather than a distinct source of truth.
+     */
+    openSeats: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT),
+    /** When the opening was observed (ISO-8601 UTC); part of the idempotency key. */
+    openedAt: z.string().datetime(),
+    /**
+     * Of `openSeats`, how many were RESERVED at the moment of the opening (FR-27).
+     *
+     * OPTIONAL so adding it cannot break existing producers, and because the page
+     * may publish no reserved line at all — `null`/absent means "unknown", never
+     * "none reserved".
+     *
+     * It does NOT affect whether this event exists: the owner ruled that an Alert
+     * fires on ANY opening (2026-08-22), reserved or not. It exists so the message
+     * can be specific instead of hedging. Deliberately a COUNT and not the group
+     * name: the name is attacker-influenced text from a third-party page, and this
+     * value is rendered into an email.
+     */
+    openReserved: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
+  })
+  /** Same subset rule as `SeatState`: an event cannot reserve more seats than opened. */
+  .refine((event) => (event.openReserved ?? 0) <= event.openSeats, {
+    message: 'openReserved cannot exceed openSeats; it counts a subset of them',
+    path: ['openReserved'],
+  });
 export type NotifyEvent = z.infer<typeof NotifyEventSchema>;
 
 /**
@@ -205,18 +260,31 @@ export type NotifyEvent = z.infer<typeof NotifyEventSchema>;
  * (`https://classes.berkeley.edu/content/<classKey>`). The notifier validates
  * against this schema before sending; the service worker validates on receipt.
  */
-export const PushAlertPayloadSchema = z.object({
-  /** Discriminant — the only push payload kind in v1 (alerts-only by contract). */
-  kind: z.literal('alert'),
-  /** Canonical class that opened. */
-  classKey: ClassKeySchema,
-  /** Which transition fired the alert (seats-open wins on a simultaneous open, D13). */
-  reason: z.enum(NOTIFY_REASONS),
-  /** Open seat count observed at the transition. Bounded by {@link MAX_OBSERVED_COUNT}. */
-  openSeats: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT),
-  /** When the opening was observed (ISO-8601 UTC). */
-  openedAt: z.string().datetime(),
-});
+export const PushAlertPayloadSchema = z
+  .object({
+    /** Discriminant — the only push payload kind in v1 (alerts-only by contract). */
+    kind: z.literal('alert'),
+    /** Canonical class that opened. */
+    classKey: ClassKeySchema,
+    /** Which transition fired the alert (seats-open wins on a simultaneous open, D13). */
+    reason: z.enum(NOTIFY_REASONS),
+    /** Open seat count observed at the transition. Bounded by {@link MAX_OBSERVED_COUNT}. */
+    openSeats: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT),
+    /** When the opening was observed (ISO-8601 UTC). */
+    openedAt: z.string().datetime(),
+    /**
+     * Of `openSeats`, how many are RESERVED (FR-27). Carried so the service worker can
+     * say what it actually knows: before this it claimed "some seats are reserved" on
+     * EVERY alert, which both understates 41-of-41 and asserts a reservation that may
+     * not exist when the page reported zero. Nullable — `null` is "unknown", not "none".
+     */
+    openReserved: z.number().int().nonnegative().max(MAX_OBSERVED_COUNT).nullish(),
+  })
+  /** Same subset rule as `SeatState`. */
+  .refine((payload) => (payload.openReserved ?? 0) <= payload.openSeats, {
+    message: 'openReserved cannot exceed openSeats; it counts a subset of them',
+    path: ['openReserved'],
+  });
 export type PushAlertPayload = z.infer<typeof PushAlertPayloadSchema>;
 
 /**

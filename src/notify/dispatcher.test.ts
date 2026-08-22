@@ -32,7 +32,11 @@ function job(kind: MailDispatchJob['kind'], suffix: string = kind): MailDispatch
     attempts: 1,
     expiresAt: alert ? new Date(OPENED_AT.getTime() + 60 * 60_000) : null,
     providerIdempotencyKey: `seat-sniper/${kind}/${suffix}`,
-    payload: alert ? { openSeats: 2 } : kind === 'operator' ? { detail: 'test' } : {},
+    payload: alert
+      ? { openSeats: 2, openReserved: 2 }
+      : kind === 'operator'
+        ? { detail: 'test' }
+        : {},
     createdAt: new Date(CREATED_AT),
   };
 }
@@ -163,6 +167,24 @@ describe('startup token-minter safety', () => {
 });
 
 describe('durable retry payloads', () => {
+  it('rejects an impossible reserved-seat snapshot before provider egress', async () => {
+    const transport = recordingTransport({ status: 'success', acceptedAt: new Date() });
+    const dispatcher = createMailDispatcher({
+      transport,
+      isSuppressed: async () => false,
+      mintToken: () => 'stable-test-token',
+      push: null,
+    });
+
+    await expect(
+      dispatcher.dispatch({
+        ...job('alert', 'invalid-reserved-subset'),
+        payload: { openSeats: 2, openReserved: 3 },
+      }),
+    ).resolves.toEqual({ status: 'permanent', errorCode: 'outbox_alert_shape_invalid' });
+    expect(transport.messages).toHaveLength(0);
+  });
+
   it.each(['alert', 'confirmation', 'manage-link'] as const)(
     'reproduces byte-identical %s mail after a delayed retry',
     async (kind) => {
@@ -284,6 +306,7 @@ describe('independent best-effort push', () => {
     expect(result.pushCompletion).toBeDefined();
     expect(await result.pushCompletion).toBe(1);
     expect(pushTransport.sent).toHaveLength(1);
+    expect(pushTransport.sent[0]?.payload.openReserved).toBe(2);
   });
 
   it('attempts push even when the suppression lookup makes email retryable', async () => {

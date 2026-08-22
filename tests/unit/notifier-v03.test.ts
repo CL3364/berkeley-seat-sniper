@@ -348,13 +348,14 @@ describe('AC-16: web push via the fake transport', () => {
       isSuppressed: async () => false,
       push: deps,
     });
-    const result = await notifier.dispatch(makeEvent(), TOKEN); // even WITH a manage token
+    const result = await notifier.dispatch(makeEvent({ openReserved: 3 }), TOKEN); // even WITH a manage token
     await eventualPushed(result);
 
     const payload = transport.sent[0].payload;
     expect(payload.kind).toBe('alert');
     expect(payload.classKey).toBe(CK);
     expect(payload.reason).toBe('seats-open');
+    expect(payload.openReserved).toBe(3);
     // No secret/PII ever leaves in a push.
     const serialized = JSON.stringify(payload);
     expect(serialized).not.toContain(TOKEN);

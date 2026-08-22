@@ -437,6 +437,7 @@ export async function runPollCycle(deps: PollCycleDeps): Promise<CycleSummary> {
       openedAt: string;
       reason: 'seats-open' | 'waitlist-open';
       openSeats: number;
+      openReserved: number | null;
     },
     budget: DeliveryStartBudget,
   ): Promise<void> {
@@ -477,6 +478,7 @@ export async function runPollCycle(deps: PollCycleDeps): Promise<CycleSummary> {
               classKey: delivery.classKey,
               reason: delivery.reason,
               openSeats: delivery.openSeats,
+              openReserved: delivery.openReserved,
               openedAt: delivery.openedAt,
             },
             manageToken,
@@ -751,7 +753,7 @@ export async function runPollCycle(deps: PollCycleDeps): Promise<CycleSummary> {
     }
 
     // Detect a genuine opening transition. There are two independent signals:
-    //   1. General-enrollment: prev had NO open seats → new has open seats.
+    //   1. Total seats (reserved seats included): prev had NO open seats → new has open seats.
     //   2. Waitlist: prev waitlist was closed → new waitlist is open.
     // Both are checked independently so a class can fire both simultaneously
     // if it transitions on both dimensions in the same poll cycle.

@@ -17,7 +17,7 @@ import {
   upsertClassState,
   WatchLimitError,
 } from './index';
-import { alertDeliveries, mailOutbox, subscribers, watches } from './schema';
+import { alertDeliveries, classState, mailOutbox, subscribers, watches } from './schema';
 
 const CLASS_KEYS = [
   '2026-fall-compsci-189-001-lec-001' as ClassKey,
@@ -130,6 +130,7 @@ describe('v0.5 persisted-count repository boundaries', () => {
       lastCapacity: null,
       lastWaitlisted: null,
       lastWaitlistMax: null,
+      lastOpenReserved: null,
     });
 
     const deliveries = await claimOpeningDeliveries(db, {
@@ -147,20 +148,28 @@ describe('v0.5 persisted-count repository boundaries', () => {
         lastCapacity: MAX_OBSERVED_COUNT,
         lastWaitlisted: MAX_OBSERVED_COUNT,
         lastWaitlistMax: MAX_OBSERVED_COUNT,
+        lastOpenReserved: MAX_OBSERVED_COUNT,
       },
     });
 
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0]?.openSeats).toBe(MAX_OBSERVED_COUNT);
-    expect(await db.select({ openSeats: alertDeliveries.openSeats }).from(alertDeliveries)).toEqual(
-      [{ openSeats: MAX_OBSERVED_COUNT }],
-    );
+    expect(deliveries[0]?.openReserved).toBe(MAX_OBSERVED_COUNT);
+    expect(
+      await db
+        .select({
+          openSeats: alertDeliveries.openSeats,
+          openReserved: alertDeliveries.openReserved,
+        })
+        .from(alertDeliveries),
+    ).toEqual([{ openSeats: MAX_OBSERVED_COUNT, openReserved: MAX_OBSERVED_COUNT }]);
     expect(await getClassState(db, CLASS_KEYS[0])).toMatchObject({
       lastOpenSeats: MAX_OBSERVED_COUNT,
       lastEnrolled: MAX_OBSERVED_COUNT,
       lastCapacity: MAX_OBSERVED_COUNT,
       lastWaitlisted: MAX_OBSERVED_COUNT,
       lastWaitlistMax: MAX_OBSERVED_COUNT,
+      lastOpenReserved: MAX_OBSERVED_COUNT,
     });
   });
 
@@ -170,6 +179,7 @@ describe('v0.5 persisted-count repository boundaries', () => {
     'lastCapacity',
     'lastWaitlisted',
     'lastWaitlistMax',
+    'lastOpenReserved',
   ] as const)('rejects an over-int4 %s before class-state persistence', async (field) => {
     const db = await makeTestDb();
     const state = {
@@ -182,12 +192,54 @@ describe('v0.5 persisted-count repository boundaries', () => {
       lastCapacity: null,
       lastWaitlisted: null,
       lastWaitlistMax: null,
+      lastOpenReserved: null,
       [field]: MAX_OBSERVED_COUNT + 1,
     };
 
     await expect(upsertClassState(db, state)).rejects.toThrow(
       `${field} must be a non-negative integer no greater than ${MAX_OBSERVED_COUNT}`,
     );
+    expect(await getClassState(db, CLASS_KEYS[0])).toBeUndefined();
+  });
+
+  it('rejects a reserved observation above open seats at both repository and SQL boundaries', async () => {
+    const db = await makeTestDb();
+    const invalidState = {
+      classKey: CLASS_KEYS[0],
+      lastStatus: 'open' as const,
+      lastOpenSeats: 2,
+      lastWaitlistOpen: false,
+      displayName: null,
+      lastEnrolled: null,
+      lastCapacity: null,
+      lastWaitlisted: null,
+      lastWaitlistMax: null,
+      lastOpenReserved: 3,
+    };
+    const expected = 'lastOpenReserved must be no greater than lastOpenSeats';
+
+    await expect(upsertClassState(db, invalidState)).rejects.toThrow(expected);
+    const opening = {
+      classKey: CLASS_KEYS[0],
+      previousStateVersion: 0,
+      openedAt: new Date().toISOString(),
+      reason: 'seats-open' as const,
+      openSeats: 2,
+      nextState: invalidState,
+    };
+    await expect(claimOpeningDeliveries(db, opening)).rejects.toThrow(expected);
+    await expect(commitOpeningAndEnqueueMail(db, opening)).rejects.toThrow(expected);
+    expect(await getClassState(db, CLASS_KEYS[0])).toBeUndefined();
+
+    await expect(
+      db.insert(classState).values({
+        classKey: CLASS_KEYS[0],
+        lastStatus: 'open',
+        lastOpenSeats: 2,
+        lastWaitlistOpen: false,
+        lastOpenReserved: 3,
+      }),
+    ).rejects.toThrow();
     expect(await getClassState(db, CLASS_KEYS[0])).toBeUndefined();
   });
 
@@ -210,6 +262,7 @@ describe('v0.5 persisted-count repository boundaries', () => {
         lastCapacity: null,
         lastWaitlisted: null,
         lastWaitlistMax: null,
+        lastOpenReserved: null,
       },
     };
     const expected = `openSeats must be a non-negative integer no greater than ${MAX_OBSERVED_COUNT}`;
@@ -221,6 +274,7 @@ describe('v0.5 persisted-count repository boundaries', () => {
         openedAt,
         reason: 'seats-open',
         openSeats: overBound,
+        openReserved: null,
       }),
     ).rejects.toThrow(expected);
     await expect(claimOpeningDeliveries(db, opening)).rejects.toThrow(expected);
@@ -244,6 +298,7 @@ describe('v0.5 persisted-count repository boundaries', () => {
         lastCapacity: null,
         lastWaitlisted: null,
         lastWaitlistMax: null,
+        lastOpenReserved: null,
       },
     };
     const expected = `lastOpenSeats must be a non-negative integer no greater than ${MAX_OBSERVED_COUNT}`;
@@ -272,6 +327,7 @@ describe('v0.5 dashboard persistence', () => {
         capacity: null,
         waitlisted: null,
         waitlistMax: null,
+        openReserved: null,
         waitlistOpen: null,
       },
     ]);
@@ -292,6 +348,7 @@ describe('v0.5 dashboard persistence', () => {
       lastCapacity: 350,
       lastWaitlisted: 100,
       lastWaitlistMax: 100,
+      lastOpenReserved: 2,
       sourceFreshUntil: new Date(Date.now() + 60_000),
     });
 
@@ -302,6 +359,7 @@ describe('v0.5 dashboard persistence', () => {
       capacity: 350,
       waitlisted: 100,
       waitlistMax: 100,
+      openReserved: 2,
       waitlistOpen: false,
     });
 
@@ -315,6 +373,7 @@ describe('v0.5 dashboard persistence', () => {
       lastCapacity: null,
       lastWaitlisted: null,
       lastWaitlistMax: null,
+      lastOpenReserved: null,
       sourceFreshUntil: new Date(Date.now() + 60_000),
     });
 
@@ -325,6 +384,7 @@ describe('v0.5 dashboard persistence', () => {
       capacity: null,
       waitlisted: null,
       waitlistMax: null,
+      openReserved: null,
       waitlistOpen: false,
     });
   });
@@ -341,6 +401,7 @@ describe('v0.5 dashboard persistence', () => {
       lastCapacity: null,
       lastWaitlisted: null,
       lastWaitlistMax: null,
+      lastOpenReserved: null,
     });
 
     expect(
@@ -359,6 +420,7 @@ describe('v0.5 dashboard persistence', () => {
           lastCapacity: 350,
           lastWaitlisted: 100,
           lastWaitlistMax: 100,
+          lastOpenReserved: 3,
         },
       }),
     ).toEqual([]);
@@ -369,6 +431,7 @@ describe('v0.5 dashboard persistence', () => {
       lastCapacity: 350,
       lastWaitlisted: 100,
       lastWaitlistMax: 100,
+      lastOpenReserved: 3,
     });
 
     expect(
@@ -387,6 +450,7 @@ describe('v0.5 dashboard persistence', () => {
           lastCapacity: 350,
           lastWaitlisted: 39,
           lastWaitlistMax: 40,
+          lastOpenReserved: 1,
         },
       }),
     ).toEqual({ transitioned: true, enqueued: 0 });
@@ -399,6 +463,7 @@ describe('v0.5 dashboard persistence', () => {
       lastCapacity: 350,
       lastWaitlisted: 39,
       lastWaitlistMax: 40,
+      lastOpenReserved: 1,
     });
   });
 });

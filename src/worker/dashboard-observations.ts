@@ -15,5 +15,6 @@ export function dashboardObservationsForPersistence(
     lastCapacity: state.capacity ?? null,
     lastWaitlisted: state.waitlisted ?? null,
     lastWaitlistMax: state.waitlistMax ?? null,
+    lastOpenReserved: state.openReserved ?? null,
   };
 }

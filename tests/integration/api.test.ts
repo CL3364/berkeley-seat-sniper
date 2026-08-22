@@ -88,6 +88,7 @@ const UNOBSERVED_DASHBOARD = {
   capacity: null,
   waitlisted: null,
   waitlistMax: null,
+  openReserved: null,
   waitlistOpen: null,
 } as const;
 
@@ -404,14 +405,15 @@ describe('AC-1: subscribe → confirm → manage roundtrip', () => {
     const token = await subscribeAndConfirm(t, VALID_EMAIL, [CK_189]);
     await upsertClassState(t.db, {
       classKey: CK_189 as ClassKey,
-      lastStatus: 'closed',
-      lastOpenSeats: 0,
+      lastStatus: 'open',
+      lastOpenSeats: 41,
       lastWaitlistOpen: false,
       displayName: 'COMPSCI 189 001 - LEC 001',
       lastEnrolled: 347,
       lastCapacity: 350,
       lastWaitlisted: 100,
       lastWaitlistMax: 100,
+      lastOpenReserved: 41,
       sourceFreshUntil: new Date(Date.now() + 60_000),
     });
 
@@ -425,11 +427,12 @@ describe('AC-1: subscribe → confirm → manage roundtrip', () => {
       source: 'public-class-page',
       sourceStale: false,
       displayName: 'COMPSCI 189 001 - LEC 001',
-      openSeats: 0,
+      openSeats: 41,
       enrolled: 347,
       capacity: 350,
       waitlisted: 100,
       waitlistMax: 100,
+      openReserved: 41,
       waitlistOpen: false,
     });
     expect(managed.watchFreshness[0].lastCheckedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);

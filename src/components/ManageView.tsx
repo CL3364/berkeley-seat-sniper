@@ -74,6 +74,25 @@ function formatOutOf(count: number | null, total: number | null): string {
 }
 
 /**
+ * How many of the open seats are RESERVED for a Reservation Group (FR-27).
+ *
+ * A live page on 2026-08-21 reported 41 open seats of which 41 were reserved for
+ * "Students with Enrollment Permission" — enrollable by nobody else. Showing a bare
+ * "41 of 520" there is technically true and practically a lie: a student reads it as
+ * 41 seats they could take.
+ *
+ * `null` means the page published no reserved line, which is NOT a claim that none
+ * are reserved — so we say nothing rather than "0 reserved".
+ */
+function describeReserved(freshness: WatchFreshness | undefined): string | null {
+  if (!freshness) return null;
+  const { openSeats, openReserved } = freshness;
+  if (openReserved === null || openReserved <= 0) return null;
+  if (openSeats !== null && openReserved >= openSeats) return 'all reserved';
+  return `${openReserved} reserved`;
+}
+
+/**
  * Open waitlist SLOTS, which is `waitlistMax - waitlisted`.
  *
  * `waitlisted` is how many students are already QUEUED, not how many places are
@@ -136,6 +155,7 @@ function WatchCard({
   disabled: boolean;
 }): React.ReactElement {
   const seats = freshness ? formatOutOf(freshness.openSeats, freshness.capacity) : UNKNOWN;
+  const reserved = describeReserved(freshness);
   const waitlist = freshness
     ? formatOutOf(openWaitlistSlots(freshness), freshness.waitlistMax)
     : UNKNOWN;
@@ -158,7 +178,10 @@ function WatchCard({
       <dl className="watch-card__stats">
         <div className="watch-card__stat">
           <dt>Open seats</dt>
-          <dd>{seats}</dd>
+          <dd>
+            {seats}
+            {reserved !== null && <span className="watch-card__caveat"> ({reserved})</span>}
+          </dd>
         </div>
         <div className="watch-card__stat">
           <dt>Open waitlist spots</dt>

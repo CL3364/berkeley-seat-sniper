@@ -308,7 +308,7 @@ decision ever be revisited. An unmet item in this list is NOT outstanding v1 wor
 
 If that decision is ever revisited, open public admission only after:
 
-- all AC-1–AC-34 evidence is current (AC-24 is CONDITIONAL — see spec §7);
+- all AC-1–AC-35 evidence is current (AC-24 is CONDITIONAL — see spec §7);
 - restore, source, and inbox canaries pass;
 - source-visible notification p95 is below two minutes throughout the pilot;
 - outbox age, bounce, complaint, and provider-quota trends are healthy;

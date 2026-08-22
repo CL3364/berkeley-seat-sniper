@@ -51,7 +51,40 @@ function subscriberFooter(manageUrl?: string): string[] {
  *                  fan-out (the alert still delivers, sans footer link).
  */
 export function renderSeatOpenEmail(event: NotifyEvent, manageUrl?: string): RenderedEmail {
-  const { classKey, openSeats, reason } = event;
+  const { classKey, openSeats, reason, openReserved } = event;
+
+  // FR-27. The page publishes how many open seats are reserved for a Reservation
+  // Group, so say it instead of hedging. A live page on 2026-08-21 showed 41 open
+  // seats of which 41 were reserved — "Open seats: 41" alone would send a student
+  // to a page where nothing is takeable. `null`/absent means the page published no
+  // reserved line, which is NOT "none reserved", so we keep the generic caveat.
+  // Only the COUNT crosses this boundary; the group name is untrusted third-party
+  // text and is never rendered into an email.
+  const reservedLines =
+    openReserved === 0
+      ? // OBSERVED zero. The page said so, so there is nothing to warn about and
+        // nothing to hedge — every open seat is generally available. Emitting the
+        // "we don't know" caveat here would understate what we actually learned.
+        []
+      : openReserved === null || openReserved === undefined
+        ? [
+            'Note: some seats are reserved for specific student groups (a major, a class',
+            'standing, first-years, transfers, and so on) and may not be enrollable for',
+            'everyone, even when they show as open. This page did not say how many are',
+            'reserved, so confirm your eligibility on the page above.',
+          ]
+        : openSeats > 0 && openReserved >= openSeats
+          ? [
+              `Heads up: ALL ${openSeats} of those seats are RESERVED for a specific student`,
+              'group (a major, a class standing, enrollment permission, and so on). If you are',
+              'not in that group you will not be able to take them. Check the page above before',
+              'rearranging your schedule.',
+            ]
+          : [
+              `Heads up: ${openReserved} of those ${openSeats} seats are RESERVED for a specific`,
+              'student group, so only the remainder are generally available. Confirm your',
+              'eligibility on the page above.',
+            ];
 
   const reasonLabel = reason === 'seats-open' ? 'open seats' : 'waitlist movement';
   const subject = `Seat alert: ${classKey} has ${reasonLabel}`;
@@ -66,10 +99,7 @@ export function renderSeatOpenEmail(event: NotifyEvent, manageUrl?: string): Ren
     'Check the class page now:',
     classPageUrl(classKey),
     '',
-    'Note: some seats are reserved for specific student groups (a major, a class',
-    'standing, first-years, transfers, and so on) and may not be enrollable for',
-    'everyone, even when they show as open. We alert on every open seat and cannot',
-    'yet tell which are reserved, so confirm your eligibility on the page above.',
+    ...reservedLines,
     '',
     ...subscriberFooter(manageUrl),
   ].join('\n');

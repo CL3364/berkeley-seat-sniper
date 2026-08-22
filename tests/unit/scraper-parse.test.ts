@@ -33,6 +33,8 @@ function livePage(
     title?: string | null;
     extraHeadings?: string;
     extraFields?: string;
+    reservedMarkup?: string;
+    outsideEnrollment?: string;
   } = {},
   identity: ClassKey = CK,
 ): string {
@@ -46,6 +48,8 @@ function livePage(
     title = null,
     extraHeadings = '',
     extraFields = '',
+    reservedMarkup = '',
+    outsideEnrollment = '',
   } = fields;
   return `<!doctype html>
     <html>
@@ -60,6 +64,7 @@ function livePage(
           <h3><a>Current Enrollment</a></h3>
           <div class="section-content">
             <div class="top"><strong>Total Open Seats:</strong><span>${openSeats}</span></div>
+            ${reservedMarkup}
             <div class="stats">
               ${enrolled === null ? '' : `<div><strong>Enrolled:</strong> ${enrolled}</div>`}
               <div><strong>Waitlisted:</strong> ${waitlisted}</div>
@@ -69,6 +74,7 @@ function livePage(
             </div>
           </div>
         </section>
+        ${outsideEnrollment}
       </body>
     </html>`;
 }
@@ -99,6 +105,7 @@ describe('parseClassPage — saved class-page fixtures', () => {
         capacity,
         waitlisted,
         waitlistMax,
+        openReserved: null,
       });
     },
   );
@@ -121,6 +128,7 @@ describe('parseClassPage — saved class-page fixtures', () => {
       capacity: 520,
       waitlisted: 265,
       waitlistMax: 300,
+      openReserved: 41,
     });
   });
 
@@ -213,6 +221,97 @@ describe('parseClassPage — saved class-page fixtures', () => {
       capacity: null,
       waitlisted: 0,
       waitlistMax: 0,
+      openReserved: null,
+    });
+  });
+
+  describe('optional openReserved observation', () => {
+    const reservedLabel = '<div><strong>Open Reserved Seats:</strong></div>';
+    const reservedDetail = (count: string, group = 'Students with Enrollment Permission') =>
+      `<div class="details"><span class="detail-numeral">${count}</span> reserved for ${group}</div>`;
+
+    it('returns explicit null without parser-broke when the reserved line is absent', () => {
+      const result = parseClassPage(livePage({ openSeats: '41' }), CK);
+
+      expect(isSeatState(result)).toBe(true);
+      expect(isParserBroke(result)).toBe(false);
+      expect(result).toMatchObject({ openSeats: 41, openReserved: null });
+    });
+
+    it.each([
+      {
+        label: 'non-integer count',
+        markup: `${reservedLabel}${reservedDetail('1.5')}`,
+      },
+      {
+        label: 'negative count',
+        markup: `${reservedLabel}${reservedDetail('-1')}`,
+      },
+      {
+        label: 'count above the storage bound',
+        markup: `${reservedLabel}${reservedDetail(String(MAX_OBSERVED_COUNT + 1))}`,
+        openSeats: String(MAX_OBSERVED_COUNT),
+      },
+      {
+        label: 'duplicate label',
+        markup: `${reservedLabel}${reservedDetail('2')}${reservedLabel}`,
+      },
+      {
+        label: 'duplicate numeral',
+        markup: `${reservedLabel}<div class="details"><span class="detail-numeral">1</span><span class="detail-numeral">1</span> reserved for Students with Enrollment Permission</div>`,
+      },
+      {
+        label: 'unrecognized detail text',
+        markup: `${reservedLabel}<div class="details"><span class="detail-numeral">2</span> available to everyone</div>`,
+      },
+    ])('degrades $label to null without parser-broke', ({ markup, openSeats = '41' }) => {
+      const result = parseClassPage(livePage({ openSeats, reservedMarkup: markup }), CK);
+
+      expect(isSeatState(result)).toBe(true);
+      expect(isParserBroke(result)).toBe(false);
+      expect(result).toMatchObject({ openReserved: null });
+    });
+
+    it('ignores a complete reserved-seat distractor outside current-enrollment', () => {
+      const result = parseClassPage(
+        livePage({
+          openSeats: '41',
+          outsideEnrollment: `<section class="historical-enrollment">${reservedLabel}${reservedDetail('41')}</section>`,
+        }),
+        CK,
+      );
+
+      expect(isSeatState(result)).toBe(true);
+      expect(isParserBroke(result)).toBe(false);
+      expect(result).toMatchObject({ openSeats: 41, openReserved: null });
+    });
+
+    it('sums multiple recognized contiguous reservation details', () => {
+      const result = parseClassPage(
+        livePage({
+          openSeats: '5',
+          reservedMarkup: `${reservedLabel}${reservedDetail('2', 'Data Science Majors')}${reservedDetail('3', 'Students with Enrollment Permission')}`,
+        }),
+        CK,
+      );
+
+      expect(isSeatState(result)).toBe(true);
+      expect(isParserBroke(result)).toBe(false);
+      expect(result).toMatchObject({ openSeats: 5, openReserved: 5 });
+    });
+
+    it('degrades a recognized sum above Total Open Seats to null', () => {
+      const result = parseClassPage(
+        livePage({
+          openSeats: '4',
+          reservedMarkup: `${reservedLabel}${reservedDetail('2', 'Data Science Majors')}${reservedDetail('3', 'Students with Enrollment Permission')}`,
+        }),
+        CK,
+      );
+
+      expect(isSeatState(result)).toBe(true);
+      expect(isParserBroke(result)).toBe(false);
+      expect(result).toMatchObject({ openSeats: 4, openReserved: null });
     });
   });
 

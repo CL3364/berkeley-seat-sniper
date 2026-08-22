@@ -8,7 +8,9 @@ import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator';
 import { describe, expect, it } from 'vitest';
 import { deadLetterIncidents } from '../../src/db/schema';
+import { getClassState, listPendingAlertDeliveries, upsertClassState } from '../../src/db';
 import * as schema from '../../src/db/schema';
+import type { ClassKey } from '../../src/shared/class-key';
 
 function migrationPrefixThrough(index: number): string {
   const directory = mkdtempSync(join(tmpdir(), 'seat-sniper-migration-prefix-'));
@@ -92,6 +94,105 @@ describe('v0.4.2 migration backfill', () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-3[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$/,
       );
       expect(incidents[0]!.openedAt).toEqual(terminalAt);
+    } finally {
+      await client.close();
+      rmSync(oldMigrations, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('upgrades a 0011 class_state with null reserved seats and supports current repo reads/writes', async () => {
+    const oldMigrations = migrationPrefixThrough(11);
+    const client = new PGlite();
+    const db = drizzlePglite(client, { schema });
+    const classKey = '2026-fall-compsci-189-001-lec-001' as ClassKey;
+    const subscriberId = 'legacy-reserved-alert-subscriber';
+    const openedAt = new Date('2030-08-21T20:01:00.000Z');
+    try {
+      await migratePglite(db, { migrationsFolder: oldMigrations });
+      await db.execute(sql`
+        insert into class_state (
+          class_key,
+          last_status,
+          last_open_seats,
+          last_waitlist_open,
+          display_name,
+          updated_at
+        )
+        values (
+          ${classKey},
+          'open',
+          41,
+          false,
+          'COMPSCI 189 001 - LEC 001',
+          ${new Date('2026-08-21T20:00:00.000Z')}
+        )
+      `);
+      await db.execute(sql`
+        insert into subscribers (id, email, confirmed_at, created_at)
+        values (
+          ${subscriberId},
+          'legacy-reserved-alert@berkeley.edu',
+          ${new Date('2026-08-21T19:00:00.000Z')},
+          ${new Date('2026-08-21T19:00:00.000Z')}
+        )
+      `);
+      await db.execute(sql`
+        insert into alert_deliveries (
+          subscriber_id,
+          class_key,
+          opened_at,
+          reason,
+          open_seats,
+          watch_activation_order,
+          expires_at,
+          provider_idempotency_key
+        )
+        values (
+          ${subscriberId},
+          ${classKey},
+          ${openedAt},
+          'seats-open',
+          41,
+          1,
+          ${new Date(openedAt.getTime() + 60 * 60_000)},
+          'legacy/reserved-alert'
+        )
+      `);
+
+      await migratePglite(db, { migrationsFolder: './drizzle' });
+
+      expect(await getClassState(db, classKey)).toMatchObject({
+        classKey,
+        lastOpenSeats: 41,
+        lastOpenReserved: null,
+      });
+      expect(await listPendingAlertDeliveries(db)).toEqual([
+        expect.objectContaining({
+          subscriberId,
+          classKey,
+          openSeats: 41,
+          openReserved: null,
+        }),
+      ]);
+
+      await upsertClassState(db, {
+        classKey,
+        lastStatus: 'open',
+        lastOpenSeats: 41,
+        lastWaitlistOpen: false,
+        displayName: 'COMPSCI 189 001 - LEC 001',
+        lastEnrolled: 479,
+        lastCapacity: 520,
+        lastWaitlisted: 265,
+        lastWaitlistMax: 300,
+        lastOpenReserved: 41,
+      });
+
+      expect(await getClassState(db, classKey)).toMatchObject({
+        classKey,
+        lastOpenSeats: 41,
+        lastOpenReserved: 41,
+      });
     } finally {
       await client.close();
       rmSync(oldMigrations, { recursive: true, force: true });

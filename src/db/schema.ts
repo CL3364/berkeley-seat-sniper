@@ -178,12 +178,13 @@ export const classState = pgTable(
     lastOpenSeats: integer('last_open_seats').notNull(),
     lastWaitlistOpen: boolean('last_waitlist_open').notNull(),
     // Optional dashboard observations. NULL is a first-class value meaning the
-    // latest successful page did not publish a usable value (FR-25/FR-26).
+    // latest successful page did not publish a usable value (FR-25–FR-27).
     displayName: text('display_name'),
     lastEnrolled: integer('last_enrolled'),
     lastCapacity: integer('last_capacity'),
     lastWaitlisted: integer('last_waitlisted'),
     lastWaitlistMax: integer('last_waitlist_max'),
+    lastOpenReserved: integer('last_open_reserved'),
     // Exact optimistic-lock token. Do not CAS on updated_at: PostgreSQL stores
     // microseconds while node-postgres round-trips Date at millisecond precision,
     // so equality against a fetched JS Date can miss the row in production.
@@ -208,6 +209,11 @@ export const classState = pgTable(
     ),
     check('class_state_status_valid', sql`${t.lastStatus} in ('open', 'waitlist', 'closed')`),
     check('class_state_open_seats_nonnegative', sql`${t.lastOpenSeats} >= 0`),
+    check(
+      'class_state_open_reserved_subset',
+      sql`${t.lastOpenReserved} is null
+        or (${t.lastOpenReserved} >= 0 and ${t.lastOpenReserved} <= ${t.lastOpenSeats})`,
+    ),
     check(
       'class_state_display_name_valid',
       sql`${t.displayName} is null or char_length(${t.displayName}) between 1 and 256`,
@@ -388,6 +394,8 @@ export const alertDeliveries = pgTable(
     // Original opening payload required to reproduce a retry after class_state changes.
     reason: text('reason', { enum: NOTIFY_REASONS }).notNull(),
     openSeats: integer('open_seats').notNull(),
+    // Nullable snapshot: NULL means the opening page published no usable reserved count.
+    openReserved: integer('open_reserved'),
     // Exact watch incarnation claimed for this opening. A remove/re-add changes
     // activation_order, making the old pending delivery terminally ineligible.
     watchActivationOrder: bigint('watch_activation_order', { mode: 'bigint' }).notNull(),
@@ -418,6 +426,11 @@ export const alertDeliveries = pgTable(
     ),
     check('alert_deliveries_reason_valid', sql`${t.reason} in ('seats-open', 'waitlist-open')`),
     check('alert_deliveries_open_seats_nonnegative', sql`${t.openSeats} >= 0`),
+    check(
+      'alert_deliveries_open_reserved_subset',
+      sql`${t.openReserved} is null
+        or (${t.openReserved} >= 0 and ${t.openReserved} <= ${t.openSeats})`,
+    ),
     check('alert_deliveries_attempt_count_nonnegative', sql`${t.attemptCount} >= 0`),
     check('alert_deliveries_watch_order_positive', sql`${t.watchActivationOrder} > 0`),
     check(

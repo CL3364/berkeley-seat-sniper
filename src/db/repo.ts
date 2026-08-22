@@ -853,6 +853,7 @@ export interface WatchFreshnessRecord {
   capacity: number | null;
   waitlisted: number | null;
   waitlistMax: number | null;
+  openReserved: number | null;
   waitlistOpen: boolean | null;
 }
 
@@ -875,6 +876,7 @@ async function fetchWatchFreshness(db: Db, subscriberId: string): Promise<WatchF
       capacity: classState.lastCapacity,
       waitlisted: classState.lastWaitlisted,
       waitlistMax: classState.lastWaitlistMax,
+      openReserved: classState.lastOpenReserved,
       waitlistOpen: classState.lastWaitlistOpen,
     })
     .from(watches)
@@ -893,6 +895,7 @@ async function fetchWatchFreshness(db: Db, subscriberId: string): Promise<WatchF
     capacity: row.capacity,
     waitlisted: row.waitlisted,
     waitlistMax: row.waitlistMax,
+    openReserved: row.openReserved,
     waitlistOpen: row.waitlistOpen,
   }));
 }
@@ -1129,6 +1132,7 @@ export async function getClassState(
       lastCapacity: number | null;
       lastWaitlisted: number | null;
       lastWaitlistMax: number | null;
+      lastOpenReserved: number | null;
       stateVersion: number;
       sourceFreshUntil: Date;
       updatedAt: Date;
@@ -1155,6 +1159,7 @@ export async function getClassState(
     lastCapacity: row.lastCapacity,
     lastWaitlisted: row.lastWaitlisted,
     lastWaitlistMax: row.lastWaitlistMax,
+    lastOpenReserved: row.lastOpenReserved,
     stateVersion: row.stateVersion,
     sourceFreshUntil: row.sourceFreshUntil,
     updatedAt: row.updatedAt,
@@ -1182,6 +1187,7 @@ export async function upsertClassState(
     lastCapacity: number | null;
     lastWaitlisted: number | null;
     lastWaitlistMax: number | null;
+    lastOpenReserved: number | null;
     sourceFreshUntil?: Date;
   },
 ): Promise<void> {
@@ -1208,6 +1214,7 @@ export async function upsertClassState(
         lastCapacity: state.lastCapacity,
         lastWaitlisted: state.lastWaitlisted,
         lastWaitlistMax: state.lastWaitlistMax,
+        lastOpenReserved: state.lastOpenReserved,
         sourceFreshUntil,
         observedWatchOrder: nextWatchVisibilityOrder(),
         updatedAt: sql`clock_timestamp()`,
@@ -1223,6 +1230,7 @@ export async function upsertClassState(
           lastCapacity: state.lastCapacity,
           lastWaitlisted: state.lastWaitlisted,
           lastWaitlistMax: state.lastWaitlistMax,
+          lastOpenReserved: state.lastOpenReserved,
           sourceFreshUntil,
           stateVersion: sql`${classState.stateVersion} + 1`,
           observedWatchOrder: nextWatchVisibilityOrder(),
@@ -1332,6 +1340,8 @@ export interface AlertDeliveryInput {
   openedAt: string;
   reason: NotifyReason;
   openSeats: number;
+  /** Reserved subset observed at this opening; null means the page did not publish it. */
+  openReserved: number | null;
 }
 
 /** Result of an idempotent delivery-ledger claim. */
@@ -1364,6 +1374,7 @@ export interface OpeningTransitionInput {
     lastCapacity: number | null;
     lastWaitlisted: number | null;
     lastWaitlistMax: number | null;
+    lastOpenReserved: number | null;
     sourceFreshUntil?: Date;
   };
 }
@@ -1394,16 +1405,28 @@ function assertPersistableClassStateCounts(state: {
   lastCapacity: number | null;
   lastWaitlisted: number | null;
   lastWaitlistMax: number | null;
+  lastOpenReserved: number | null;
 }): void {
   assertPersistableCount('lastOpenSeats', state.lastOpenSeats);
   assertPersistableNullableCount('lastEnrolled', state.lastEnrolled);
   assertPersistableNullableCount('lastCapacity', state.lastCapacity);
   assertPersistableNullableCount('lastWaitlisted', state.lastWaitlisted);
   assertPersistableNullableCount('lastWaitlistMax', state.lastWaitlistMax);
+  assertPersistableNullableCount('lastOpenReserved', state.lastOpenReserved);
+  if (state.lastOpenReserved !== null && state.lastOpenReserved > state.lastOpenSeats) {
+    throw new TypeError('lastOpenReserved must be no greater than lastOpenSeats');
+  }
 }
 
 function assertPersistableOpenSeats(openSeats: number): void {
   assertPersistableCount('openSeats', openSeats);
+}
+
+function assertPersistableOpenReserved(openSeats: number, openReserved: number | null): void {
+  assertPersistableNullableCount('openReserved', openReserved);
+  if (openReserved !== null && openReserved > openSeats) {
+    throw new TypeError('openReserved must be no greater than openSeats');
+  }
 }
 
 /**
@@ -1421,6 +1444,7 @@ export async function claimAlertDelivery(
 ): Promise<AlertDeliveryClaimStatus> {
   const classKey = assertClassKey(delivery.classKey);
   assertPersistableOpenSeats(delivery.openSeats);
+  assertPersistableOpenReserved(delivery.openSeats, delivery.openReserved);
   const openedAt = openedAtDate(delivery.openedAt);
 
   const [watch] = await db
@@ -1446,6 +1470,7 @@ export async function claimAlertDelivery(
       openedAt,
       reason: delivery.reason,
       openSeats: delivery.openSeats,
+      openReserved: delivery.openReserved,
       watchActivationOrder: watch.activationOrder,
       expiresAt: new Date(openedAt.getTime() + MAIL_ALERT_EXPIRY_MS),
       providerIdempotencyKey: legacyAlertIdempotencyKey({
@@ -1577,6 +1602,7 @@ export async function getEligibleAlertDelivery(
       openedAt: alertDeliveries.openedAt,
       reason: alertDeliveries.reason,
       openSeats: alertDeliveries.openSeats,
+      openReserved: alertDeliveries.openReserved,
       createdAt: alertDeliveries.createdAt,
     })
     .from(alertDeliveries)
@@ -1612,6 +1638,7 @@ export async function getEligibleAlertDelivery(
         openedAt: row.openedAt.toISOString(),
         reason: row.reason as NotifyReason,
         openSeats: row.openSeats,
+        openReserved: row.openReserved,
         createdAt: row.createdAt,
       }
     : undefined;
@@ -1656,6 +1683,7 @@ export async function listPendingAlertDeliveries(
       openedAt: alertDeliveries.openedAt,
       reason: alertDeliveries.reason,
       openSeats: alertDeliveries.openSeats,
+      openReserved: alertDeliveries.openReserved,
       createdAt: alertDeliveries.createdAt,
     })
     .from(alertDeliveries)
@@ -1680,6 +1708,7 @@ export async function listPendingAlertDeliveries(
     openedAt: row.openedAt.toISOString(),
     reason: row.reason as NotifyReason,
     openSeats: row.openSeats,
+    openReserved: row.openReserved,
     createdAt: row.createdAt,
   }));
 }
@@ -1698,6 +1727,7 @@ export async function claimOpeningDeliveries(
   const classKey = assertClassKey(opening.classKey);
   assertPersistableOpenSeats(opening.openSeats);
   assertPersistableClassStateCounts(opening.nextState);
+  assertPersistableOpenReserved(opening.openSeats, opening.nextState.lastOpenReserved);
   const openedAt = openedAtDate(opening.openedAt);
   const sourceFreshUntil = opening.nextState.sourceFreshUntil ?? new Date(Date.now() + 120 * 1_000);
   if (Number.isNaN(sourceFreshUntil.getTime())) {
@@ -1746,6 +1776,7 @@ export async function claimOpeningDeliveries(
         lastCapacity: opening.nextState.lastCapacity,
         lastWaitlisted: opening.nextState.lastWaitlisted,
         lastWaitlistMax: opening.nextState.lastWaitlistMax,
+        lastOpenReserved: opening.nextState.lastOpenReserved,
         sourceFreshUntil,
         stateVersion: sql`${classState.stateVersion} + 1`,
         observedWatchOrder: nextWatchVisibilityOrder(),
@@ -1779,6 +1810,7 @@ export async function claimOpeningDeliveries(
           openedAt,
           reason: opening.reason,
           openSeats: opening.openSeats,
+          openReserved: opening.nextState.lastOpenReserved,
           watchActivationOrder: target.watchActivationOrder,
           expiresAt: new Date(openedAt.getTime() + MAIL_ALERT_EXPIRY_MS),
           providerIdempotencyKey: legacyAlertIdempotencyKey({
@@ -1800,6 +1832,7 @@ export async function claimOpeningDeliveries(
       openedAt: opening.openedAt,
       reason: opening.reason,
       openSeats: opening.openSeats,
+      openReserved: opening.nextState.lastOpenReserved,
       createdAt: createdBySubscriber.get(target.id) ?? openedAt,
     }));
   });
@@ -1979,6 +2012,7 @@ export async function commitOpeningAndEnqueueMail(
   const classKey = assertClassKey(opening.classKey);
   assertPersistableOpenSeats(opening.openSeats);
   assertPersistableClassStateCounts(opening.nextState);
+  assertPersistableOpenReserved(opening.openSeats, opening.nextState.lastOpenReserved);
   const openedAt = openedAtDate(opening.openedAt);
   const sourceFreshUntil = opening.nextState.sourceFreshUntil ?? new Date(Date.now() + 120 * 1_000);
   assertValidDate(sourceFreshUntil, 'sourceFreshUntil');
@@ -2018,6 +2052,7 @@ export async function commitOpeningAndEnqueueMail(
         lastCapacity: opening.nextState.lastCapacity,
         lastWaitlisted: opening.nextState.lastWaitlisted,
         lastWaitlistMax: opening.nextState.lastWaitlistMax,
+        lastOpenReserved: opening.nextState.lastOpenReserved,
         sourceFreshUntil,
         stateVersion: sql`${classState.stateVersion} + 1`,
         observedWatchOrder: nextWatchVisibilityOrder(),
@@ -2052,7 +2087,10 @@ export async function commitOpeningAndEnqueueMail(
           openedAt,
           reason: opening.reason,
           expiresAt: new Date(openedAt.getTime() + MAIL_ALERT_EXPIRY_MS),
-          payload: { openSeats: opening.openSeats },
+          payload: {
+            openSeats: opening.openSeats,
+            openReserved: opening.nextState.lastOpenReserved,
+          },
         })),
       )
       .onConflictDoNothing()

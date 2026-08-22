@@ -51,6 +51,7 @@ const EMPTY_DASHBOARD_STATE = {
   lastCapacity: null,
   lastWaitlisted: null,
   lastWaitlistMax: null,
+  lastOpenReserved: null,
 } as const;
 
 beforeEach(() => {

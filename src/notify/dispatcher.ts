@@ -334,15 +334,25 @@ export function createMailDispatcher(options: MailDispatcherOptions = {}): MailD
       return null;
     }
     const openSeats = job.payload['openSeats'];
+    const openReserved = job.payload['openReserved'];
     const parsed = NotifyEventSchema.safeParse({
       subscriberId,
       email,
       classKey: job.classKey,
       reason: job.reason,
       openSeats,
+      openReserved,
       openedAt: job.openedAt.toISOString(),
     });
-    return parsed.success ? parsed.data : null;
+    if (!parsed.success) return null;
+    if (
+      parsed.data.openReserved !== null &&
+      parsed.data.openReserved !== undefined &&
+      parsed.data.openReserved > parsed.data.openSeats
+    ) {
+      return null;
+    }
+    return parsed.data;
   }
 
   function startPush(jobId: string, event: NotifyEvent): Promise<number> {
@@ -384,6 +394,9 @@ export function createMailDispatcher(options: MailDispatcherOptions = {}): MailD
       reason: event.reason,
       openSeats: event.openSeats,
       openedAt: event.openedAt,
+      // FR-27: carry the reserved count so the service worker can say what it knows
+      // instead of claiming "some seats are reserved" on every alert.
+      openReserved: event.openReserved ?? null,
     });
     let cursor = 0;
     let sent = 0;

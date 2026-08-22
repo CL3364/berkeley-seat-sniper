@@ -49,6 +49,7 @@ function repo(overrides: Partial<SubscriptionRepo> = {}): SubscriptionRepo {
           capacity: null,
           waitlisted: null,
           waitlistMax: null,
+          openReserved: null,
           waitlistOpen: null,
         })),
       };
@@ -71,6 +72,7 @@ function repo(overrides: Partial<SubscriptionRepo> = {}): SubscriptionRepo {
             capacity: null,
             waitlisted: null,
             waitlistMax: null,
+            openReserved: null,
             waitlistOpen: null,
           },
         ],

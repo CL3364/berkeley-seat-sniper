@@ -581,6 +581,9 @@ export function createNotifier(options: NotifierOptions = {}): Notifier {
       reason: event.reason,
       openSeats: event.openSeats,
       openedAt: event.openedAt,
+      // FR-27: carry the reserved count so the service worker can say what it knows
+      // instead of claiming "some seats are reserved" on every alert.
+      openReserved: event.openReserved ?? null,
     });
 
     let nextTarget = 0;
