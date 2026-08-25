@@ -6,6 +6,7 @@
  * older tests can keep driving `runPollCycle` until their fixtures migrate.
  */
 
+import { BLIND_WINDOW_MS } from '../db';
 import type {
   MailDispatchJob,
   MailDispatchResult,
@@ -628,6 +629,35 @@ export async function runCacheAwarePollCycle(deps: CacheAwarePollCycleDeps): Pro
     enqueued: 0,
   };
 
+  // --- Blind-window disclosure (FR-28 / ADR 0010) ----------------------------
+  // Runs BEFORE the source phase, and this ordering is load-bearing rather than
+  // incidental. A worker that was simply not running is the commonest Blind
+  // window there is — a redeploy, a crash, an OOM kill, a lost lease — and the
+  // first cycle back reads every Section as due, stamping `class_state.updated_at`
+  // to now. Sweeping afterwards would therefore find no window at all and erase
+  // exactly the case this feature exists for. Reading the durable state first
+  // sees the gap that actually elapsed; the source phase then rearms it.
+  //
+  // It is also deliberately NOT gated on source fetching being enabled. The
+  // kill switch, a latched safety stop, an unavailable origin fence, and an
+  // aborted cycle all skip every per-Section code path below and write no
+  // failure record anywhere, so an unconditional sweep is what makes "we could
+  // not look" reportable at all. It reads durable state only, so a cycle that
+  // fetches nothing still discloses correctly.
+  const blindWindow = await deps.repo.enqueueBlindWindowDisclosures({ now: new Date(nowMs()) });
+  onProgress();
+  if (blindWindow.enqueued > 0) {
+    log.warn({
+      event: 'blind_window_disclosed',
+      // Class keys and counts only — never a subscriber address (AC-8).
+      classKeys: blindWindow.disclosedSections,
+      sectionCount: blindWindow.disclosedSections.length,
+      enqueued: blindWindow.enqueued,
+      windowMs: BLIND_WINDOW_MS,
+      classification: 'blind_window',
+    });
+  }
+
   let retentionPurged = 0;
   let expiredAtStart = 0;
   let firstDrain = emptyDrainSummary();
@@ -984,6 +1014,8 @@ export async function runCacheAwarePollCycle(deps: CacheAwarePollCycleDeps): Pro
     notified: mail.sent,
     suppressed: 0,
     addressSuppressed: mail.suppressed,
+    blindWindowDisclosed: blindWindow.enqueued,
+    blindSections: blindWindow.disclosedSections,
     sourceRequests: counters.sourceRequests,
     sourceNotModified: counters.sourceNotModified,
     sourceDeferred: counters.sourceDeferred,
@@ -1013,6 +1045,7 @@ export async function runCacheAwarePollCycle(deps: CacheAwarePollCycleDeps): Pro
     sourceDeferred: summary.sourceDeferred,
     sourceFailures: summary.sourceFailures,
     sourceStaleCount: summary.sourceStaleCount,
+    blindWindowDisclosed: summary.blindWindowDisclosed,
     mailClaimed: summary.mailClaimed,
     mailSent: summary.mailSent,
     mailDeferred: summary.mailDeferred,

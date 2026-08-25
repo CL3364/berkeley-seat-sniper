@@ -1,4 +1,4 @@
-import { classPageUrl } from '../shared/class-key';
+import { classPageUrl, type ClassKey } from '../shared/class-key';
 import type { NotifyEvent } from '../shared/seat-state';
 
 /**
@@ -158,6 +158,71 @@ export function renderManageLinkEmail(manageUrl: string): RenderedEmail {
     '',
     'This is an automated notify-only service. It does not enroll you, and it never',
     'asks for your CalNet login or password.',
+  ].join('\n');
+
+  return { subject, body };
+}
+
+/**
+ * Render the BLIND-WINDOW disclosure (outbox kind `'blind-window'`, FR-28).
+ *
+ * The one email a Subscriber receives in the ABSENCE of an Opening. ADR 0010
+ * accepts that a single best-effort Operator guarantees windows where nothing is
+ * watched; this is the honesty rule that keeps such a window from reading as
+ * "no Opening happened." It is also the ONLY signal a Subscriber will get for
+ * that gap: after an hour unread, the recovering parse re-baselines instead of
+ * firing a transition, so an Opening that came and went inside the window is
+ * never alerted retroactively.
+ *
+ * Written to stay TRUE if it is delivered late. It names the last successful
+ * read instead of a duration, so a reader can judge the gap themselves, and it
+ * never claims the window is still open beyond the present tense the send
+ * justified. Nothing here depends on the current time, so a retry renders a
+ * byte-identical body.
+ *
+ * BOUNDARY: only the class key and a timestamp we generated cross into this
+ * body. No seat counts (we have none — that is the point), no reservation-group
+ * name, no scraper `detail`, no third-party page text, and no reason for the
+ * failure: those originate on a page we do not control and are Operator-facing.
+ *
+ * @param input.classKey   the Section that cannot be read.
+ * @param input.lastReadAt when that Section was last successfully read — the
+ *                         moment the Blind window opened.
+ * @param manageUrl        the Subscriber's manage link for the footer, minted by
+ *                         the dispatcher at send time. Optional, exactly as for
+ *                         an Alert.
+ */
+export function renderBlindWindowEmail(
+  input: { classKey: ClassKey; lastReadAt: Date },
+  manageUrl?: string,
+): RenderedEmail {
+  const { classKey, lastReadAt } = input;
+
+  const subject = `Seat Sniper is not watching ${classKey} right now`;
+
+  const body = [
+    `Berkeley Seat Sniper has not been able to read ${classKey} since the time`,
+    'below, so it is not watching that class at the moment.',
+    '',
+    `Last successful read: ${lastReadAt.toISOString()} (UTC)`,
+    '',
+    'If a seat opened after that, we did not see it and you did not hear from us.',
+    'Silence about this class is not currently evidence that nothing happened.',
+    'Your other watched classes are unaffected unless we email you about them.',
+    '',
+    'If you are counting on this class, check the page yourself:',
+    classPageUrl(classKey),
+    '',
+    'We keep retrying. Watching resumes on its own as soon as the page can be',
+    'read again, and you will get no further email about this particular gap,',
+    'however long it lasts.',
+    '',
+    'One thing worth saying plainly: this service is run by one person on a',
+    'best-effort basis. Nobody is woken up for a problem like this, so one that',
+    'starts overnight may not be looked at until the morning. Please keep your',
+    'own backup plan for a class you actually need.',
+    '',
+    ...subscriberFooter(manageUrl),
   ].join('\n');
 
   return { subject, body };

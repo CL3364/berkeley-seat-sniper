@@ -12,6 +12,7 @@ import type { ClassKey } from '../shared/class-key';
 import type { NotifyReason, SeatStatus } from '../shared/seat-state';
 import type { MailDispatchJob } from '../notify';
 import type {
+  BlindWindowSweepResult,
   DeadLetterIncidentSurfaceClaim,
   MailClaimBatch,
   MailDeferDisposition,
@@ -210,6 +211,16 @@ export interface DurableWorkerRepo {
   commitOpeningAndEnqueueMail(opening: OpeningTransitionInput): Promise<OpeningMailCommitResult>;
   enqueueOperatorMail(input: { classKey?: ClassKey; detail: string }): Promise<string>;
   /**
+   * Disclose every Blind window that has passed the horizon (FR-28): one email
+   * per Subscriber per window, deduped durably so a restart cannot double-send
+   * and cannot restart the elapsed clock. Safe to call every cycle — a window
+   * already disclosed enqueues nothing.
+   */
+  enqueueBlindWindowDisclosures(options?: {
+    now?: Date;
+    windowMs?: number;
+  }): Promise<BlindWindowSweepResult>;
+  /**
    * Atomically open one parser-broke episode and enqueue its sole Operator
    * mail. Repeated observations remain no-ops until a successful parse records
    * recovery.
@@ -312,6 +323,17 @@ export interface CycleSummary {
    * that predate the split are unaffected.
    */
   addressSuppressed?: number;
+
+  /**
+   * Blind-window disclosures enqueued this cycle (FR-28) — one per Subscriber
+   * newly told that a Section has gone unread past the horizon. Normally 0: a
+   * window already disclosed never re-enqueues. A count only; the accompanying
+   * `blindSections` carries class keys, which are not PII.
+   */
+  blindWindowDisclosed?: number;
+
+  /** Sections that received a Blind-window disclosure this cycle (class keys only). */
+  blindSections?: ClassKey[];
 
   /** v0.4 cache-aware source and durable-outbox counters (all PII-free). */
   sourceRequests?: number;

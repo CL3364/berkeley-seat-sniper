@@ -135,6 +135,11 @@ function cycleRepo(classKeys: ClassKey[] = [CLASS_KEY]): RuntimeWorkerRepo {
     async enqueueOperatorMail() {
       return 'operator-mail-1';
     },
+    // FR-28. Every cycle sweeps for Blind windows, including cycles that fetch
+    // nothing; these fixtures assert source behaviour, so the sweep is a no-op.
+    async enqueueBlindWindowDisclosures() {
+      return { disclosedSections: [], enqueued: 0 };
+    },
   } as unknown as RuntimeWorkerRepo;
 }
 

@@ -99,6 +99,11 @@ function v04Repo(overrides: Partial<RuntimeWorkerRepo> = {}): RuntimeWorkerRepo 
     recordParserRecovery: vi.fn(async () => false),
     recordParserBroken: vi.fn(async () => ({ status: 'already-broken' })),
     retireWatchesForClass: vi.fn(async () => 1),
+    // FR-28: the cycle sweeps for Blind windows unconditionally; a no-op here.
+    enqueueBlindWindowDisclosures: vi.fn(async () => ({
+      disclosedSections: [],
+      enqueued: 0,
+    })),
     ...overrides,
   } as unknown as RuntimeWorkerRepo;
 }

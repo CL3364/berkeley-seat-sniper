@@ -36,7 +36,22 @@ export const watchVisibilityOrder = pgSequence('watch_visibility_order_seq');
 const DB_CLASS_KEY_PATTERN =
   '^[0-9]{4}-(fall|spring|summer)-[a-z0-9]{1,32}-[a-z0-9]{1,32}-((?=[a-z0-9]{1,8}-)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})-[a-z]{2,8}-((?=[a-z0-9]{1,8}$)(?=[a-z0-9]*[a-z])[a-z0-9]+|[0-9]{3,8})$';
 
-export const MAIL_OUTBOX_KINDS = ['alert', 'confirmation', 'manage-link', 'operator'] as const;
+/**
+ * `blind-window` (FR-28) is the ONE subscriber-facing kind that is not an
+ * Opening. It is a mail kind rather than a third `NOTIFY_REASON` on purpose:
+ * `NOTIFY_REASONS` is the architect-owned contract for Openings, and both its
+ * dedup rule ("seats-open wins, the more-actionable signal") and
+ * `PushAlertPayload` assume the thing being reported HAPPENED. A Blind window
+ * is the absence of an observation, so it carries `reason = null` and never
+ * pushes (push is alerts-only by contract).
+ */
+export const MAIL_OUTBOX_KINDS = [
+  'alert',
+  'confirmation',
+  'manage-link',
+  'operator',
+  'blind-window',
+] as const;
 export type MailOutboxKind = (typeof MAIL_OUTBOX_KINDS)[number];
 
 export const MAIL_OUTBOX_STATUSES = [
@@ -456,6 +471,18 @@ export const alertDeliveries = pgTable(
  * template metadata. Recipient addresses are joined from `subscribers` at claim
  * time; manage/confirm tokens are minted by the dispatcher at send time. An
  * Operator job resolves its address from trusted process configuration.
+ *
+ * `opened_at` is per-kind: for `alert` it is when the Opening was observed, and
+ * for `blind-window` (FR-28) it is when the Section was LAST SUCCESSFULLY READ,
+ * i.e. the moment the Blind window opened. Both use it as the logical dedup key
+ * (see the two partial unique indexes below).
+ *
+ * `expires_at` is set for `alert` only. An Opening stops being actionable after
+ * an hour, so an undelivered Alert is cancelled. A Blind-window disclosure does
+ * NOT expire and is never cancelled on recovery: an Opening may have gone unseen
+ * during the window, so the Subscriber's silence was unearned whether or not the
+ * window has since cleared. Undeliverable disclosures instead reach the ordinary
+ * non-Alert retry horizon and dead-letter to the Operator.
  */
 export const mailOutbox = pgTable(
   'mail_outbox',
@@ -498,6 +525,20 @@ export const mailOutbox = pgTable(
     uniqueIndex('mail_outbox_alert_logical_uq')
       .on(t.subscriberId, t.classKey, t.openedAt)
       .where(sql`${t.kind} = 'alert'`),
+    /**
+     * Exactly one Blind-window disclosure per Subscriber per window (FR-28).
+     *
+     * This index IS the once-per-window discipline — there is no in-memory
+     * episode set to lose. For a `blind-window` row `opened_at` is the WINDOW
+     * START (the last successful read of the Section), so a restarted worker
+     * recomputes the same key from `class_state` and its insert conflicts away
+     * instead of emailing a second time. A later successful read advances
+     * `class_state.updated_at`, which makes the next window a different key and
+     * rearms disclosure without any explicit recovery write.
+     */
+    uniqueIndex('mail_outbox_blind_window_logical_uq')
+      .on(t.subscriberId, t.classKey, t.openedAt)
+      .where(sql`${t.kind} = 'blind-window'`),
     index('mail_outbox_claimable_idx')
       .on(t.availableAt, t.createdAt)
       .where(sql`${t.status} = 'queued'`),
@@ -511,7 +552,7 @@ export const mailOutbox = pgTable(
       .where(sql`${t.terminalAt} is not null`),
     check(
       'mail_outbox_kind_valid',
-      sql`${t.kind} in ('alert', 'confirmation', 'manage-link', 'operator')`,
+      sql`${t.kind} in ('alert', 'confirmation', 'manage-link', 'operator', 'blind-window')`,
     ),
     check(
       'mail_outbox_status_valid',
@@ -552,6 +593,13 @@ export const mailOutbox = pgTable(
           ${t.kind} = 'operator'
           and ${t.subscriberId} is null
           and ${t.openedAt} is null
+          and ${t.reason} is null
+          and ${t.expiresAt} is null
+        ) or (
+          ${t.kind} = 'blind-window'
+          and (${t.subscriberId} is not null or ${t.status} = 'dead_letter')
+          and ${t.classKey} is not null
+          and ${t.openedAt} is not null
           and ${t.reason} is null
           and ${t.expiresAt} is null
         )`,

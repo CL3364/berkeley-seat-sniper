@@ -308,7 +308,7 @@ decision ever be revisited. An unmet item in this list is NOT outstanding v1 wor
 
 If that decision is ever revisited, open public admission only after:
 
-- all AC-1–AC-35 evidence is current (AC-24 is CONDITIONAL — see spec §7);
+- all AC-1–AC-36 evidence is current (AC-24 is CONDITIONAL — see spec §7);
 - restore, source, and inbox canaries pass;
 - source-visible notification p95 is below two minutes throughout the pilot;
 - outbox age, bounce, complaint, and provider-quota trends are healthy;
@@ -324,8 +324,12 @@ gates: real mail transport, double opt-in, authenticated SPF/DKIM/DMARC, robots/
 confirmation, the source-safety stop, and a monitored Operator inbox all still apply before
 a single invitation goes out. The Operator inbox is assigned as of 2026-08-25 (ADR 0010): one
 Operator, no backup, on a push-filtered alias, responding best-effort within waking hours. The
-blocker that replaced it is Blind-window disclosure, and it is still OPEN — no invitation goes
-out until a 60-minute unreadable Section emails its watchers exactly once.
+blocker that replaced it, Blind-window disclosure, is SATISFIED as of 2026-08-25: a Section
+unread for 60 minutes emails its watchers exactly once per window (FR-28 / AC-36). Operator
+note: that sweep runs every poll cycle even when source fetching is off, so leaving the kill
+switch or the FR-7 safety stop engaged for over an hour WILL email every Confirmed watcher
+once. That is deliberate — it is the disclosure working — but plan a long deliberate stop
+knowing it is visible to Subscribers.
 
 ## 6. Deploy and rollback
 

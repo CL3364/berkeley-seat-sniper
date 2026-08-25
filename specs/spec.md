@@ -117,6 +117,17 @@
 > `429 rate_limited` its mounted limiter already returns. Launch posture is local, then
 > friends-only; the Public gate is retired as a v1 goal and the pilot Operator inbox is
 > recorded as an explicit open blocker. AC-31–AC-34 added.
+>
+> Rev 2026-08-25: honesty rules. FR-27/AC-35 (added earlier without a Rev line) disclose how
+> many open seats are RESERVED, on the dashboard, in the Alert body, and in push, so a
+> 41-open/41-reserved Section can no longer read as 41 takeable seats. FR-28/AC-36 apply the
+> same rule to AVAILABILITY: a watched Section unread for 60 minutes emails its watchers
+> exactly one Blind-window disclosure per window, never repeated, rearmed by a successful
+> read. This closes the build gate that ADR 0010 put in place of the pilot Operator-inbox
+> blocker, which that ADR withdrew as structurally unsatisfiable. NO API-contract change —
+> `NOTIFY_REASONS` stays pinned to Openings and a disclosure is a new `mail_outbox` kind
+> with `reason = null` that is never pushed. Both the elapsed clock and the already-told
+> fact are durable in PostgreSQL, so a worker restart neither re-sends nor resets the clock.
 
 ## 1. Problem & users
 
@@ -427,6 +438,82 @@ wherever code or this spec says "class," read "Section" (decision D11; no rename
   Extraction note: this field's markup differs from the other labeled values — the label sits alone
   in its `<div>` and the count lives in a following `<div class="details">`, so the shared
   label-then-value helper does not reach it.
+- FR-28 (blind-window disclosure): when a watched Section has gone `BLIND_WINDOW_MS` (60
+  minutes) without a successful read, every Confirmed Subscriber holding a LIVE activated
+  Watch on it MUST receive EXACTLY ONE email per window saying the system is not currently
+  watching that Section, and MUST NOT receive a second for the same window however long it
+  lasts. A later successful read rearms disclosure for the next window. This is FR-27's
+  honesty rule applied to availability (ADR 0010): the product already refuses to render an
+  unobserved reserved count as zero, so it MUST equally refuse to let "we could not look"
+  read as "no Opening happened."
+  The horizon is DERIVED from the existing Alert expiry, not a second tunable, and is not
+  configurable: one hour is already where the product stops treating seat information as
+  actionable.
+  The elapsed clock is time since the last SUCCESSFUL read (`class_state.updated_at`, which
+  only a 200 parse or a trusted 304 stamps), NOT time since a first failure. A Blind window
+  is "we could not look," which is strictly broader than `parser-broke`: the kill switch, the
+  FR-7 safety stop, an unavailable origin fence, a robots skip, a fetch timeout, a lost
+  advisory lease, and a worker that was not running all blind a Section while writing no
+  per-Section failure record at all. Detection MUST therefore run every cycle regardless of
+  whether source fetching was enabled, and MUST run BEFORE that cycle's source phase. The
+  ordering is load-bearing, not incidental: worker downtime is the commonest Blind window
+  there is, and the first cycle back reads every Section as due and stamps
+  `class_state.updated_at` to now, so a sweep placed after the source phase would find no
+  window and silently erase exactly the outage this requirement exists to report.
+  A window starts at the LATER of the Section's last successful read and `watches.activated_at`,
+  never the earlier. A Subscriber is owed disclosure only for time THEY were relying on us, and
+  `class_state` outlives the Watches that created it — removing the last Watch on a Section stops
+  it being polled but leaves the row for 90 days — so dating from the row alone would tell a
+  newcomer "we are not watching this, last read three weeks ago" seconds after they subscribe, for
+  a Section the worker reads fine two minutes later. Every Watch therefore gets the same grace
+  period from activation. A Section never successfully read has no row at all and dates its window
+  from activation by the same rule; that case MUST NOT be exempt, being the worst one.
+  Both the elapsed clock and the already-disclosed fact MUST be DURABLE, so that a worker
+  restart or lease handoff neither re-sends nor restarts the clock. A disclosure is an
+  ordinary `mail_outbox` row of kind `blind-window` whose `opened_at` is the WINDOW START,
+  made once-per-window by a partial unique index on (`subscriber_id`, `class_key`,
+  `opened_at`) — the same durable mechanism as the Alert fan-out (§5).
+  A Blind window is NOT an Opening and MUST NOT be modelled as a third `NOTIFY_REASON`: the
+  reason union is pinned to Openings, its "seats-open wins" dedup assumes the reported event
+  happened, and `PushAlertPayload` is `kind: 'alert'` by contract. The row therefore carries
+  `reason = null`, and a disclosure is never pushed.
+  It carries no `expires_at` and is never cancelled on recovery. An Alert expires because a
+  seat stops being takeable; the disclosed FACT stays true, and after an hour unread the
+  recovering parse re-baselines rather than firing a transition (§5), so an Opening inside
+  the window is never alerted retroactively — the disclosure is the only signal that gap ever
+  produces. Undeliverable disclosures reach the ordinary non-Alert retry horizon (FR-22).
+  NOT REQUESTING is not NOT KNOWING. The source scheduler declines to re-request a Section
+  while the origin's own `Cache-Control` still vouches for the representation it gave us, and
+  honours a max-age far beyond an hour. Blindness therefore requires BOTH halves: unread past
+  the horizon AND `class_state.source_fresh_until` already lapsed. Without the second half a
+  correctly-cached healthy Section is indistinguishable from an outage by elapsed time alone,
+  and a FALSE disclosure costs more trust than the silence this requirement breaks. This is
+  a suppressor, not the trigger, and does not make FR-28 a variant of `sourceStale`.
+  Eligibility is the Alert fan-out's, MINUS the
+  `activation_order <= observed_watch_order` visibility fence: live Watch, non-null
+  `activated_at`, Confirmed Subscriber (FR-9/FR-13). The fence exists to stop a newly
+  activated Watch inheriting a baseline TRANSITION it never saw; a Blind window is not a
+  transition, and a Subscriber waiting on an unreadable Section is exactly who needs telling.
+  Eligibility is re-checked at claim time: a
+  retired Watch, an unconfirmed Subscriber, or a `class-gone` Section cancels a queued
+  disclosure as `subscriber-ineligible`.
+  Two bounds are deliberate rather than oversights. A Section that recovers and re-blinds
+  hourly discloses hourly: each hour genuinely IS a new window, silence in it genuinely was
+  unearned, and suppressing would withhold a true statement — the alert-fatigue budget ADR
+  0010 allocates is spent here. And because the already-told fact IS the disclosure row, a
+  window still open after the 90-day terminal-mail purge (FR-22) loses its evidence and may
+  disclose a second time; a Section unreadable for three consecutive months is outside the
+  regime this requirement is designed for. It is subscriber-facing bulk mail, so unlike an
+  Operator alert it is suppression-gated (FR-12) and carries the RFC 8058 headers (§6).
+  Copy MUST name the Section, state when it was last successfully read, say plainly that
+  silence is not currently evidence, tell the reader to check Berkeley directly, and carry
+  the best-effort single-Operator caveat inline — ADR 0010 puts pilot expectation-setting in
+  the personal invitation, which is not durable, so this email is the only place it survives.
+  Only the class key and timestamps the system generated may cross into the body: no seat
+  counts (none were observed), no Reservation Group, no scraper `detail`, and no third-party
+  page text. The body MUST NOT depend on the current time, so a retry renders identically.
+  This requirement is DISTINCT from the dashboard's `sourceStale` hint, which is pull-only
+  and fires after five minutes for reasons that do not warrant contacting anyone.
 
 ## 4. API contract (summary; `src/shared/**` is authoritative)
 
@@ -733,11 +820,17 @@ recovered_at NULL, updated_at)` — `status ∈ healthy|broken`. A parser-broke 
 - `mail_outbox(id PK, kind, subscriber_id NULL, class_key NULL, opened_at NULL, reason
 NULL, status, attempts, available_at, expires_at NULL, claimed_at NULL, sent_at NULL,
 terminal_at NULL, provider_idempotency_key UNIQUE, payload, created_at)` — the durable
-  queue for Confirmation, Manage-link, Alert, and Operator mail (FR-17). `status ∈
+  queue for Confirmation, Manage-link, Alert, Operator, and Blind-window mail (FR-17).
+  `status ∈
 queued|processing|sent|cancelled|dead_letter`; `payload` contains bounded template
   metadata only, never an email, token, raw HTML, or provider secret. Alert jobs have a
   unique `(subscriber_id, class_key, opened_at)` logical key and `expires_at =
-opened_at + 1 hour`. Enqueue happens in the same transaction as the state change that
+opened_at + 1 hour`. Blind-window jobs (FR-28) have their OWN partial unique index on the
+  same three columns and no `expires_at`; on that kind `opened_at` is the window start —
+  the Section's last successful read — and it is what makes disclosure once-per-window
+  durable across restart. The two indexes are independent, so an Opening and a Blind window
+  may share a (subscriber, Section, timestamp) triple. Enqueue happens in the same
+  transaction as the state change that
   requires mail. A claim uses a lease / `FOR UPDATE SKIP LOCKED`; the dispatcher retries
   the SAME provider idempotency key and marks success only after acceptance. One job maps
   to one provider request—never a provider batch. The token/link for retries is
@@ -1194,8 +1287,9 @@ not a production default. Admission-specific tests exercise all three modes sepa
   public admission were ever enabled. Per the owner decision of 2026-07-30 (§2 Rollout
   posture) `public` is not a v1 destination, so AC-24 is not a v1 gate and its unmet items
   are not outstanding v1 work. The items that ARE v1 gates for the friends-only pilot are
-  listed under "Rollout gates" (hard blockers + pilot), including the open Blind-window
-  disclosure gate that replaced the Operator-inbox blocker (ADR 0010). Should the decision be revisited, release evidence must include the dated
+  listed under "Rollout gates" (hard blockers + pilot). The Blind-window disclosure gate that
+  replaced the Operator-inbox blocker (ADR 0010) is satisfied by FR-28/AC-36.
+  Should the decision be revisited, release evidence must include the dated
   owner risk-acceptance and
   one-global-request/second rate-decision records, a current robots evaluation that does
   not disallow the exact content path, deployed `SOURCE_REQUESTS_PER_SECOND=1` and
@@ -1273,6 +1367,29 @@ not a production default. Admission-specific tests exercise all three modes sepa
   or `Waitlist Max` still yields `parser-broke` (FR-6 unchanged). A successful 200 whose
   optional markup disappeared clears those stored values to null, while a 304 leaves the
   prior observation intact.
+- AC-36 [FR-28, FR-9, FR-12, FR-13]: A Confirmed Subscriber watching a Section last read 59
+  minutes ago receives nothing. At 61 minutes exactly one `blind-window` job is enqueued,
+  carrying that Section's key, `opened_at` equal to the last successful read, `reason` null,
+  and `expires_at` null. Running further cycles with EVERY piece of process-local worker
+  state rebuilt — a fresh repo binding, source schedule, and maintenance state, which is what
+  a restart or an advisory-lease handoff looks like — and with `KILL_SWITCH=1` so no Section
+  is read at all, still leaves exactly ONE job hours later. A successful read then rearms it:
+  a second window enqueues a second job with a different `opened_at`. Separately, a worker
+  DOWN for over an hour discloses on the very cycle that recovers, dating the window from the
+  last successful read and not from the recovery, even though that same cycle's source phase
+  reads the Section successfully — a sweep ordered after the source phase fails this.
+  A Section unread for five hours whose `source_fresh_until` is still in the future receives
+  NOTHING, and discloses only once that guarantee lapses, still dated from the last read.
+  A Watch added to a Section whose `class_state` row is already weeks stale receives NOTHING
+  on activation and discloses only an hour later, dated from activation. A Section that has
+  never been read at all discloses from `watches.activated_at`. A Pending Subscriber and a
+  retired Watch receive nothing, a `class-gone` Section cancels a queued disclosure as
+  `subscriber-ineligible`, and a suppressed address is withheld. The rendered email names the
+  Section, states the last successful read, says silence is not currently evidence, links the
+  Berkeley page, carries the single-Operator best-effort caveat, and contains no seat count,
+  no Reservation Group, no address, and no third-party page text. No push is attempted.
+  A direct second insert for the same (subscriber, Section, window start) is rejected by the
+  database, and a disclosure row with a null `opened_at` is rejected by the shape constraint.
 
 ### Rollout gates
 
@@ -1299,7 +1416,7 @@ not a production default. Admission-specific tests exercise all three modes sepa
   student, and `ADMISSION_MODE=public` is not a planned state for v1. The mode still exists
   in the code and its tests remain valid, but reaching it is out of scope; do not treat the
   gate chain below as pending work. Should that decision ever be revisited, the bar is:
-  AC-1–AC-35 pass, the restore and live canaries pass, the two-minute source-visible SLO
+  AC-1–AC-36 pass, the restore and live canaries pass, the two-minute source-visible SLO
   and mail backlog stay healthy across the pilot, complaints/bounces remain within the
   provider's healthy range, and rollback/kill-switch procedures have been exercised.
   Existing subscriber-flow fixtures that set `ADMISSION_MODE=public` remain a TEST setting
@@ -1325,15 +1442,29 @@ on that label alone — monitored in practice rather than in theory. Response is
 within waking hours, at a cadence that tracks the enrollment calendar; no incident wakes the
 Operator.
 
-**The replacement gate is a build gate, and it is OPEN.** Because best-effort response
-guarantees Blind windows, the system must disclose them rather than let a Subscriber read
-silence as "no Opening happened" (the FR-27 honesty rule applied to availability). No pilot
-invitation goes out until Blind-window disclosure ships: 60 minutes of continuous failure to
-read a Section sends that Section's watchers exactly one email per window, never repeated,
-with the same once-per-episode discipline as the parser-broke Operator alert. This is
-outstanding work, not an existing behaviour, and must not be read as satisfied by the
-dashboard's `sourceStale` indicator, which is pull-only and fires after five minutes for
-reasons that do not warrant contacting anyone.
+**The replacement gate was a build gate, and it is SATISFIED (2026-08-25).** Because
+best-effort response guarantees Blind windows, the system must disclose them rather than let
+a Subscriber read silence as "no Opening happened" (the FR-27 honesty rule applied to
+availability). That work has shipped as **FR-28**, verified by **AC-36**: 60 minutes without
+a successful read of a Section sends that Section's watchers exactly one email per window,
+never repeated, and a later successful read rearms it.
+
+Two things about the delivered shape are worth recording, because both differ from the
+sketch this gate was written against. First, the once-per-window discipline is NOT the
+parser-broke Operator alert's: that episode state is an in-memory `Set` rebuilt on every
+lease acquisition, which for a Subscriber-facing email would either double-send after a
+restart or restart the elapsed clock. Disclosure is durable in PostgreSQL instead — the
+elapsed clock is `class_state.updated_at` and the already-told fact is the disclosure row
+itself under a partial unique index (§5). Second, the clock is time since the last
+SUCCESSFUL read rather than since a first failure, because the conditions that blind a
+Section hardest — the kill switch, the FR-7 safety stop, an unavailable origin fence, a lost
+lease, a worker that was not running — record no per-Section failure anywhere.
+
+The gate is closed by FR-28, and NOT by the dashboard's `sourceStale` indicator, which
+remains pull-only and fires after five minutes for reasons that do not warrant contacting
+anyone. No other pilot gate changes: real transport, double opt-in, authenticated
+SPF/DKIM/DMARC, robots/ToS confirmation, and the source-safety stop all still stand, and
+admission remains `closed` while any of them is open.
 
 ## 8. Task breakdown (dependencies & owners; teammate names per AGENTS.md in parens)
 
@@ -1347,10 +1478,10 @@ reasons that do not warrant contacting anyone.
 | 6   | Notify: individual-job Resend throttling/idempotency, stable durable-time rendering, retry classification, fail-closed suppression, best-effort push        | notifier-engineer (notify)                  | 1, 2       |
 | 7   | Minimal UI integration: Berkeley validation/copy, session-scoped pilot invite journey, freshness/capacity/error states, mirrored service-worker key grammar | frontend-engineer (ui)                      | 1, 4       |
 | 8   | Single-VPS topology: Redis/private networks, one-shot migrations, backups, health/metrics, deploy/rollback                                                  | devops-engineer (infra)                     | 1, 2, 4–6  |
-| 9   | Unit/integration coverage for FR-1–FR-27 and AC-1–AC-35, including activation/admission concurrency and real PostgreSQL/Redis lanes                         | test-engineer (test)                        | 2–6        |
+| 9   | Unit/integration coverage for FR-1–FR-28 and AC-1–AC-36, including activation/admission concurrency and real PostgreSQL/Redis lanes                         | test-engineer (test)                        | 2–6        |
 | 10  | Browser journeys and production-like Compose smoke tests                                                                                                    | e2e-qa-engineer (e2e)                       | 7–9        |
 | 11  | Independent security and code review                                                                                                                        | security-reviewer + code-reviewer (sec/rev) | 3–8        |
-| 12  | Full gates, release evidence, AC-1–AC-35, then `.claude/acceptance.passed`                                                                                  | lead                                        | 9–11       |
+| 12  | Full gates, release evidence, AC-1–AC-36, then `.claude/acceptance.passed`                                                                                  | lead                                        | 9–11       |
 
 Task 1 blocks implementation. Tasks 2 and 3 then run in parallel; 4 and 6 follow the DB
 contract; 5 joins DB + source; 7/8 integrate; independent tests/reviews precede acceptance.

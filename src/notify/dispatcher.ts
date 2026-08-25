@@ -14,6 +14,7 @@ import {
 import { mintOpeningToken, mintToken as defaultMintToken } from '../server/token';
 import { buildConfirmUrl, buildListUnsubscribeHeaders, buildManageUrl } from './links';
 import {
+  renderBlindWindowEmail,
   renderConfirmationEmail,
   renderDeadLetterIncident,
   renderManageLinkEmail,
@@ -25,6 +26,7 @@ import { assertProductionMailRuntime, assertProductionMailTransport } from './ru
 import { createNoopTransport } from './transports/noop';
 import { createWebPushTransport } from './transports/push';
 import { createRealTransport } from './transports/smtp';
+import { OUTBOX_KINDS } from './types';
 import type {
   MailDispatchBatchItem,
   MailDispatchJob,
@@ -32,6 +34,7 @@ import type {
   MailDispatcher,
   DeadLetterIncidentSurface,
   OutboxEntry,
+  OutboxKind,
   ProviderOutcome,
   ProviderSuccess,
   PushDeps,
@@ -300,6 +303,48 @@ export function createMailDispatcher(options: MailDispatcherOptions = {}): MailD
           },
         },
       };
+    }
+
+    if (job.kind === 'blind-window') {
+      // FR-28. `openedAt` on this kind is the WINDOW START — the last successful
+      // read — not an Opening. Validate it as strictly as the Alert shape: a
+      // disclosure that cannot say WHEN we last saw the class is worse than
+      // useless, because the reader cannot size the gap.
+      const classKey = ClassKeySchema.safeParse(job.classKey).data;
+      if (
+        classKey === undefined ||
+        !(job.openedAt instanceof Date) ||
+        Number.isNaN(job.openedAt.getTime())
+      ) {
+        return permanent('outbox_blind_window_shape_invalid');
+      }
+      const rendered = renderBlindWindowEmail(
+        { classKey, lastReadAt: job.openedAt },
+        buildManageUrl(runtime.appBaseUrl, token),
+      );
+      return {
+        status: 'ready',
+        value: {
+          job,
+          message: {
+            to: email,
+            from: runtime.from,
+            subject: rendered.subject,
+            body: rendered.body,
+            headers: buildListUnsubscribeHeaders(runtime.appBaseUrl, token),
+            idempotencyKey: job.providerIdempotencyKey,
+          },
+        },
+      };
+    }
+
+    if (job.kind !== 'manage-link') {
+      // Exhaustiveness fence. Before FR-28 this function ended in a bare
+      // fallthrough to the manage-link template, so a kind added to the enum
+      // without a branch here would silently mail the WRONG email to a real
+      // subscriber. Fail the job instead; `never` makes it a compile error too.
+      const unreachable: never = job.kind;
+      return permanent(`outbox_kind_unhandled:${String(unreachable)}`);
     }
 
     const rendered = renderManageLinkEmail(buildManageUrl(runtime.appBaseUrl, token));
@@ -723,7 +768,7 @@ function validDeadLetterIncident(incident: DeadLetterIncidentSurface): boolean {
     boundedId(incident.id) &&
     boundedId(incident.mailJobId) &&
     validProviderKey(incident.idempotencyKey) &&
-    ['alert', 'confirmation', 'manage-link', 'operator'].includes(incident.mailKind) &&
+    OUTBOX_KINDS.includes(incident.mailKind as OutboxKind) &&
     boundedClassification(incident.terminalReason) &&
     boundedClassification(incident.lastErrorCode) &&
     incident.openedAt instanceof Date &&

@@ -92,6 +92,13 @@
       "when": 1787375214460,
       "tag": "0012_open_reserved_observation",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1787693811197,
+      "tag": "0013_blind_window_disclosure",
+      "breakpoints": true
     }
   ]
 }

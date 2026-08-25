@@ -4,15 +4,26 @@ import type { NotifyEvent, NotifyReason, PushAlertPayload } from '../shared/seat
 /**
  * The pinned outbox kinds (spec §4). Every entry the notifier records carries
  * exactly one of these. Subscriber-facing kinds (`alert | confirmation |
- * manage-link`) pass the suppression gate (FR-12) before they are sent; the
- * `operator` kind is internal and exempt.
+ * manage-link | blind-window`) pass the suppression gate (FR-12) before they
+ * are sent; the `operator` kind is internal and exempt.
  *
  * NOTE (terminology, v0.3): the seat-open subscriber alert is kind `'alert'`
  * (was `'subscriber'` in v0.1/v0.2). Tests extract confirm/manage links from
  * confirmation/manage-link bodies by regex, so those bodies render the absolute
  * URL on its own line (spec §4 pinned link formats).
+ *
+ * `blind-window` (FR-28) is the only kind that reports the ABSENCE of an
+ * observation rather than an event. It is subscriber-facing, so it is
+ * suppression-gated and carries the RFC 8058 headers, but it is never pushed:
+ * `PushAlertPayload` is pinned to alerts by contract.
  */
-export const OUTBOX_KINDS = ['alert', 'confirmation', 'manage-link', 'operator'] as const;
+export const OUTBOX_KINDS = [
+  'alert',
+  'confirmation',
+  'manage-link',
+  'operator',
+  'blind-window',
+] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
 /**

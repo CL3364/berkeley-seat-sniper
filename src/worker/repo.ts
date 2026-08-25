@@ -24,6 +24,7 @@ import {
   deadLetterMailJob,
   deferAlertDelivery,
   deferMailJob,
+  enqueueBlindWindowDisclosures,
   enqueueOperatorMail,
   expireMailOutboxAlerts,
   getClassState,
@@ -110,6 +111,10 @@ export function createWorkerRepo(db: Db): RuntimeWorkerRepo {
 
     enqueueOperatorMail(input) {
       return enqueueOperatorMail(db, input);
+    },
+
+    enqueueBlindWindowDisclosures(options) {
+      return enqueueBlindWindowDisclosures(db, options);
     },
 
     recordParserBroken(input) {

@@ -142,6 +142,17 @@ export interface CapacityAdmissionOptions {
 }
 
 export const MAIL_ALERT_EXPIRY_MS = 60 * 60 * 1_000;
+/**
+ * The Blind-window horizon (FR-28 / ADR 0010): how long a watched Section must
+ * go without a successful read before its watchers are told the system is not
+ * watching it.
+ *
+ * DERIVED from the Alert expiry rather than introduced as a second tunable. The
+ * product already treats seat information older than an hour as no longer
+ * actionable, so an hour of not looking is exactly the point at which silence
+ * stops being evidence that nothing happened. One horizon, one place to change.
+ */
+export const BLIND_WINDOW_MS = MAIL_ALERT_EXPIRY_MS;
 export const MAIL_RETRY_HORIZON_MS = 23 * 60 * 60 * 1_000;
 export const PENDING_SUBSCRIBER_RETENTION_MS = 72 * 60 * 60 * 1_000;
 export const TERMINAL_RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
@@ -175,12 +186,26 @@ function assertSubscriberCapacityLimit(value: number | undefined): number | unde
   return value;
 }
 
-function outboxIdentity(kind: 'alert' | 'confirmation' | 'manage-link' | 'operator'): {
+function outboxIdentity(kind: MailOutboxKind): {
   id: string;
   providerIdempotencyKey: string;
 } {
   const id = crypto.randomUUID();
   return { id, providerIdempotencyKey: `seat-sniper/${kind}/${id}` };
+}
+
+/**
+ * Stable provider key for one Blind-window disclosure (FR-28). Deterministic in
+ * the same three values the logical unique index keys on, so a retry, a restart,
+ * or a second worker derives a byte-identical key. Carries an opaque subscriber
+ * id and a canonical class key only — never an address (constitution / AC-8).
+ */
+function blindWindowIdempotencyKey(input: {
+  subscriberId: string;
+  classKey: ClassKey;
+  windowStartedAt: Date;
+}): string {
+  return `seat-sniper/blind-window/${input.subscriberId}/${input.classKey}/${input.windowStartedAt.toISOString()}`;
 }
 
 function legacyAlertIdempotencyKey(input: {
@@ -1102,7 +1127,11 @@ export async function retireWatchesForClass(
       })
       .where(
         and(
-          eq(mailOutbox.kind, 'alert'),
+          // A vanished Section retires its Watches and deliberately tells no
+          // Subscriber (FR-13). A queued Blind-window disclosure would break
+          // that: it would announce we stopped watching a class that no longer
+          // exists, moments before the Watch disappears from the dashboard.
+          inArray(mailOutbox.kind, ['alert', 'blind-window']),
           eq(mailOutbox.classKey, validatedKey),
           inArray(mailOutbox.status, ['queued', 'processing']),
         ),
@@ -1847,7 +1876,12 @@ export type SubscriberMailKind = 'confirmation' | 'manage-link';
 export interface MailDispatchJob {
   id: string;
   claimToken: string;
-  kind: 'alert' | 'confirmation' | 'manage-link' | 'operator';
+  /**
+   * Derived from {@link MAIL_OUTBOX_KINDS} rather than restated, so a new kind
+   * cannot land in the schema while this claim shape silently keeps the old
+   * union and forces a cast at the dispatcher boundary.
+   */
+  kind: MailOutboxKind;
   subscriberId: string | null;
   /** Resolved only for the duration of dispatch. PII: never log or persist elsewhere. */
   email: string | null;
@@ -2100,6 +2134,192 @@ export async function commitOpeningAndEnqueueMail(
   });
 }
 
+/** Outcome of one Blind-window sweep. Counts and class keys only — never PII. */
+export interface BlindWindowSweepResult {
+  /**
+   * Sections that received a NEW disclosure this sweep, sorted and deduped.
+   * A Section already disclosed for its current window is absent — it is still
+   * blind, it has simply already been reported once, which is the whole rule.
+   */
+  disclosedSections: ClassKey[];
+  /** Disclosure jobs enqueued — one per Subscriber, never more than one per window. */
+  enqueued: number;
+}
+
+/**
+ * Enqueue exactly one Blind-window disclosure per Subscriber per window (FR-28).
+ *
+ * WHY THE CLOCK IS `class_state.updated_at`
+ *   A Blind window is "we could not look," which is far broader than "the parser
+ *   broke." Kill switch, the FR-7 safety stop, an unavailable origin fence, a
+ *   robots skip, a fetch timeout, a lost lease, and a worker that was simply not
+ *   running all blind a Section while writing NO per-Section failure record —
+ *   `parser_health` stays absent or healthy throughout. The only signal that
+ *   survives every one of those is the ABSENCE of a successful read, and
+ *   `class_state.updated_at` records exactly that: it is stamped by a 200 parse
+ *   or a trusted 304 and by nothing else (see the `class_state` doc comment).
+ *   Measuring from the last success rather than from a first failure is also the
+ *   quantity ADR 0010 actually names.
+ *
+ * WHY THERE IS NO EPISODE TABLE
+ *   The two facts this feature needs are already durable. "How long has this
+ *   Section been unreadable" is `class_state.updated_at`. "Have we already told
+ *   this Subscriber about THIS window" is the existence of the disclosure row
+ *   itself, enforced by `mail_outbox_blind_window_logical_uq` on
+ *   (subscriber_id, class_key, opened_at) where `opened_at` IS the window start.
+ *   Both live in PostgreSQL, so a worker restart recomputes an identical key and
+ *   the insert conflicts away instead of emailing a second time, and neither the
+ *   elapsed clock nor the already-told fact can be lost with process memory.
+ *   Rearming is likewise free: the next successful read moves
+ *   `class_state.updated_at`, so a later window carries a different key.
+ *
+ * The `not exists` filter is an efficiency guard, not the guarantee — it keeps a
+ * 30-second poll loop from attempting a doomed insert per watcher per cycle. The
+ * unique index is what makes the rule true under concurrent workers.
+ *
+ * A Section never successfully read has no `class_state` row at all, which is
+ * the worst case rather than a benign one: a Watch added while the source is
+ * down would otherwise be silently exempt from disclosure forever. Those fall
+ * back to `watches.activated_at`, the durable moment the Subscriber began
+ * expecting coverage — which is also the floor for every other Watch, so nobody
+ * is told about blindness that predates their own interest.
+ *
+ * Eligibility mirrors the Alert fan-out — live Watch, activated, Confirmed
+ * Subscriber (FR-9/FR-13) — and deliberately omits the
+ * `activation_order <= observed_watch_order` visibility fence. That fence exists
+ * to stop a newly activated Watch inheriting a baseline TRANSITION it never saw;
+ * a Blind window is not a transition, and a Subscriber who has been waiting on
+ * an unreadable Section is precisely who needs telling.
+ */
+export async function enqueueBlindWindowDisclosures(
+  db: Db,
+  options: { now?: Date; windowMs?: number } = {},
+): Promise<BlindWindowSweepResult> {
+  const windowMs = options.windowMs ?? BLIND_WINDOW_MS;
+  if (!Number.isSafeInteger(windowMs) || windowMs < 1) {
+    throw new TypeError('blind-window horizon must be a positive whole number of milliseconds');
+  }
+  const now = options.now ?? new Date();
+  assertValidDate(now, 'now');
+  const cutoff = new Date(now.getTime() - windowMs);
+
+  // The window start for one watcher: the Section's last successful read, or
+  // the moment this Watch went live, whichever is LATER.
+  //
+  // `greatest`, not `coalesce`. A Subscriber is owed disclosure for the time
+  // THEY were relying on us, and a window cannot begin before they had a Watch.
+  // `class_state` outlives the Watches that caused it — removing the last Watch
+  // on a Section stops it being polled but leaves the row for 90 days — so a
+  // stale row is ordinary, not exotic. Under `coalesce` someone adding a Watch
+  // on such a Section would be told "we are not watching this, last read three
+  // weeks ago" seconds after signing up, for a class the worker reads fine two
+  // minutes later. `greatest` gives every Watch the same honest grace period
+  // from activation that a never-read Section already gets. PostgreSQL's
+  // `greatest` skips NULLs, so a Section with no `class_state` row still falls
+  // back to `activated_at`, which the eligibility filter guarantees is non-null.
+  //
+  // TRUNCATED TO MILLISECONDS deliberately. PostgreSQL keeps microseconds while
+  // node-postgres round-trips a Date at millisecond precision (see the
+  // `class_state.state_version` comment, which warns about exactly this). Left
+  // at full precision, the value we SELECT would be truncated on its way into
+  // `opened_at`, and the `not exists` probe below would then compare a truncated
+  // stored timestamp against an untruncated live one and never match — the guard
+  // would silently do nothing on every cycle forever. Truncating on BOTH sides
+  // of the comparison keeps them like-for-like. Two distinct windows for one
+  // Watch cannot share a millisecond: they are an hour of blindness apart.
+  const windowStartedAt = sql<Date>`date_trunc(
+    'milliseconds',
+    greatest(${classState.updatedAt}, ${watches.activatedAt})
+  )`;
+
+  return db.transaction(async (tx) => {
+    const blind = await tx
+      .select({
+        subscriberId: watches.subscriberId,
+        classKey: watches.classKey,
+        windowStartedAt: windowStartedAt.mapWith(classState.updatedAt),
+      })
+      .from(watches)
+      .innerJoin(subscribers, eq(subscribers.id, watches.subscriberId))
+      .leftJoin(classState, eq(classState.classKey, watches.classKey))
+      .where(
+        and(
+          isNull(watches.retiredAt),
+          isNotNull(watches.activatedAt),
+          isNotNull(subscribers.confirmedAt),
+          sql`${windowStartedAt} <= ${cutoff}`,
+          // NOT REQUESTING is not the same as NOT KNOWING. The source scheduler
+          // deliberately declines to re-request a Section while the origin's own
+          // `Cache-Control` still vouches for the representation it gave us, and
+          // it honours a max-age of up to a year (MAX_CACHE_FRESHNESS_SECONDS in
+          // src/scraper/fetch.ts). A page served with max-age above an hour would
+          // therefore sit unrequested — perfectly healthy, perfectly current, and
+          // by elapsed time alone indistinguishable from an outage. Telling four
+          // people we had stopped watching a Section we were correctly caching
+          // would be a FALSE disclosure, which costs more trust than the silence
+          // this feature exists to break.
+          //
+          // So blindness requires both halves: we have not read it for an hour
+          // AND the answer we are holding is no longer source-visibly current.
+          // `source_fresh_until` is stamped by the same successful reads that
+          // stamp `updated_at`, so it is frozen exactly when we are genuinely
+          // blind, and in the ordinary `max-age=0` case it lapses 120 seconds
+          // after a read and suppresses nothing. A Section with no `class_state`
+          // row at all has never been read, so there is nothing to vouch for it.
+          sql`(
+            ${classState.sourceFreshUntil} is null
+            or ${classState.sourceFreshUntil} <= ${now}
+          )`,
+          sql`not exists (
+            select 1
+            from ${mailOutbox}
+            where ${mailOutbox.kind} = 'blind-window'
+              and ${mailOutbox.subscriberId} = ${watches.subscriberId}
+              and ${mailOutbox.classKey} = ${watches.classKey}
+              and ${mailOutbox.openedAt} = ${windowStartedAt}
+          )`,
+        ),
+      );
+
+    if (blind.length === 0) return { disclosedSections: [], enqueued: 0 };
+
+    const inserted = await tx
+      .insert(mailOutbox)
+      .values(
+        blind.map((row) => {
+          const classKey = assertClassKey(row.classKey);
+          return {
+            id: crypto.randomUUID(),
+            kind: 'blind-window' as const,
+            subscriberId: row.subscriberId,
+            classKey,
+            // Per-kind meaning: the window start, i.e. the last successful read.
+            openedAt: row.windowStartedAt,
+            // Deterministic, so a concurrent worker collides on the provider key
+            // as well as on the logical index. Carries no address or token.
+            providerIdempotencyKey: blindWindowIdempotencyKey({
+              subscriberId: row.subscriberId,
+              classKey,
+              windowStartedAt: row.windowStartedAt,
+            }),
+            // Everything the copy needs is already a column. Keeping the payload
+            // empty keeps the PII surface of a retained row at zero.
+            payload: {},
+          };
+        }),
+      )
+      .onConflictDoNothing()
+      // No-argument .returning(): the union `Db` type cannot resolve the
+      // columns-argument overload here (same limitation as retireWatchesForClass).
+      .returning();
+
+    const disclosedSections = [
+      ...new Set(inserted.map((row) => row.classKey).filter((key): key is string => key !== null)),
+    ].sort() as ClassKey[];
+    return { disclosedSections, enqueued: inserted.length };
+  });
+}
+
 /** Mark due Alerts terminal before they can be claimed or reclaimed. */
 export async function expireMailOutboxAlerts(db: Db): Promise<number> {
   const rows = await db
@@ -2263,7 +2483,10 @@ export async function claimMailBatch(
     );
 
     // A removed/retired watch or de-confirmed subscriber is no longer eligible.
-    // Unsubscribe itself cascades the job through subscriber_id.
+    // Unsubscribe itself cascades the job through subscriber_id. This covers
+    // both per-Watch subscriber kinds: an Alert and a Blind-window disclosure
+    // (FR-28) are equally undeliverable once the Watch that justified them is
+    // gone, and a disclosure has no expiry of its own to retire it.
     await tx
       .update(mailOutbox)
       .set({
@@ -2276,7 +2499,7 @@ export async function claimMailBatch(
       })
       .where(
         and(
-          eq(mailOutbox.kind, 'alert'),
+          inArray(mailOutbox.kind, ['alert', 'blind-window']),
           inArray(mailOutbox.status, ['queued', 'processing']),
           sql`not exists (
             select 1

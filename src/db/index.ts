@@ -103,6 +103,7 @@ export {
   deadLetterMailJob,
   deferAlertDelivery,
   deferMailJob,
+  enqueueBlindWindowDisclosures,
   enqueueOperatorMail,
   expireMailOutboxAlerts,
   expireMailOutboxRetryHorizon,
@@ -122,9 +123,11 @@ export {
   sweepRetention,
   upsertClassState,
 } from './repo';
+export { BLIND_WINDOW_MS, MAIL_ALERT_EXPIRY_MS } from './repo';
 export type {
   AlertDeliveryClaimStatus,
   AlertDeliveryInput,
+  BlindWindowSweepResult,
   ClaimedMailCancellationInput,
   DeadLetterIncidentSurfaceClaim,
   MailCompletionInput,
