@@ -22,6 +22,13 @@ v0.4.5; the "then public" arm is withdrawn (see amendment below); operational ga
 > blocker (spec §"Rollout gates") and no invitation goes out until it has a named primary and
 > backup.
 >
+> **[That last sentence is superseded 2026-08-25 by ADR 0010.]** The inbox is now assigned,
+> and the primary-and-backup requirement is withdrawn as structurally unsatisfiable rather
+> than deferred — resolving an Operator alert requires host credentials, so a backup without
+> them resolves nothing, and one with them widens PII access past what a friends-only pilot
+> justifies. The Operator is singular by definition. The gate that now holds invitations is
+> Blind-window disclosure, and it is open.
+>
 > The filename retains "then-public" for link stability; read the title as historical.
 
 ## Context

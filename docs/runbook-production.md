@@ -322,7 +322,10 @@ limits; it does not prove enrollment.
 Note that none of this relaxes the PILOT bar. Friends-only lowers the audience, not the
 gates: real mail transport, double opt-in, authenticated SPF/DKIM/DMARC, robots/ToS
 confirmation, the source-safety stop, and a monitored Operator inbox all still apply before
-a single invitation goes out. The Operator inbox is an explicitly UNASSIGNED blocker.
+a single invitation goes out. The Operator inbox is assigned as of 2026-08-25 (ADR 0010): one
+Operator, no backup, on a push-filtered alias, responding best-effort within waking hours. The
+blocker that replaced it is Blind-window disclosure, and it is still OPEN — no invitation goes
+out until a 60-minute unreadable Section emails its watchers exactly once.
 
 ## 6. Deploy and rollback
 

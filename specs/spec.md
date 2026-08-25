@@ -1194,8 +1194,8 @@ not a production default. Admission-specific tests exercise all three modes sepa
   public admission were ever enabled. Per the owner decision of 2026-07-30 (§2 Rollout
   posture) `public` is not a v1 destination, so AC-24 is not a v1 gate and its unmet items
   are not outstanding v1 work. The items that ARE v1 gates for the friends-only pilot are
-  listed under "Rollout gates" (hard blockers + pilot), including the unassigned Operator
-  inbox blocker. Should the decision be revisited, release evidence must include the dated
+  listed under "Rollout gates" (hard blockers + pilot), including the open Blind-window
+  disclosure gate that replaced the Operator-inbox blocker (ADR 0010). Should the decision be revisited, release evidence must include the dated
   owner risk-acceptance and
   one-global-request/second rate-decision records, a current robots evaluation that does
   not disallow the exact content path, deployed `SOURCE_REQUESTS_PER_SECOND=1` and
@@ -1305,17 +1305,35 @@ not a production default. Admission-specific tests exercise all three modes sepa
   Existing subscriber-flow fixtures that set `ADMISSION_MODE=public` remain a TEST setting
   and are not evidence of a public launch intent (§7 preamble).
 
-**OPEN BLOCKER — pilot Operator inbox is UNASSIGNED.** `OPERATOR_EMAIL` is not a
-notification preference; it is a required on-call address, and the application refuses to
-boot with a real mail transport unless it is set. Two things route there and both need a
-human inside a short window: a parser-break episode (FR-14) sends exactly ONE email and
-never repeats until a later successful parse rearms it, so an unread alert means watchers on
-that Section silently stop being notified; and a dead-letter incident (FR-22) opens a durable
-`unresolved` incident that fails aggregate readiness until a human acknowledges or resolves
-it. Alerts expire by design within the hour, so a break noticed the next morning means pilot
-users got nothing. This blocker is explicitly UNRESOLVED and must not be read as satisfied by
-any other gate above. It needs a named primary and a named backup on a mailbox with push
-notifications, not a role alias. No pilot invitation goes out until it is assigned.
+**RESOLVED 2026-08-25 (owner decision, ADR 0010) — pilot Operator inbox.** `OPERATOR_EMAIL`
+is not a notification preference; it is a required on-call address, and the application
+refuses to boot with a real mail transport unless it is set. Two things route there and both
+need a human: a parser-break episode (FR-14) sends exactly ONE email and never repeats until
+a later successful parse rearms it, so an unread alert means watchers on that Section silently
+stop being notified; and a dead-letter incident (FR-22) opens a durable `unresolved` incident
+that fails aggregate readiness until a human acknowledges or resolves it. Alerts expire by
+design within the hour, so a break noticed the next morning means pilot users got nothing.
+
+The earlier form of this blocker demanded "a named primary and a named backup." That demand
+is **withdrawn as structurally unsatisfiable**, not deferred. Resolving either incident class
+requires an authenticated session on the deployment host (§ runbook), so a backup who is not
+also a credential holder resolves nothing, and one who is widens access to Subscriber PII
+beyond what a friends-only pilot justifies. Per ADR 0010 the **Operator is singular by
+definition**: one deployment, one Operator, no rota. `OPERATOR_EMAIL` is a plus-alias on that
+Operator's existing personal account, filtered to a dedicated label with mobile push enabled
+on that label alone — monitored in practice rather than in theory. Response is best-effort
+within waking hours, at a cadence that tracks the enrollment calendar; no incident wakes the
+Operator.
+
+**The replacement gate is a build gate, and it is OPEN.** Because best-effort response
+guarantees Blind windows, the system must disclose them rather than let a Subscriber read
+silence as "no Opening happened" (the FR-27 honesty rule applied to availability). No pilot
+invitation goes out until Blind-window disclosure ships: 60 minutes of continuous failure to
+read a Section sends that Section's watchers exactly one email per window, never repeated,
+with the same once-per-episode discipline as the parser-broke Operator alert. This is
+outstanding work, not an existing behaviour, and must not be read as satisfied by the
+dashboard's `sourceStale` indicator, which is pull-only and fires after five minutes for
+reasons that do not warrant contacting anyone.
 
 ## 8. Task breakdown (dependencies & owners; teammate names per AGENTS.md in parens)
 

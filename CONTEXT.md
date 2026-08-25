@@ -86,10 +86,27 @@ conversation uses a word, the conflict gets resolved here first.
   browser additionally receives it there. Push is additive — it never replaces email and
   carries only Alerts (never Confirmation or Manage links).
 
+- **Stale** — a Watch whose Section has not been confirmed by a recent successful read.
+  Staleness is a hint shown on the dashboard, not a claim that anything is broken; a
+  single slow response makes a Watch Stale.
+
+- **Blind window** — a sustained, continuous inability to read a watched Section: long
+  enough that a Subscriber can no longer safely read silence as "no Opening happened."
+  Distinct from Stale, and a much higher bar. A Blind window is the one condition under
+  which the system tells a Subscriber something in the _absence_ of an Opening, because
+  the alternative is letting them trust a silence the system did not earn. It is
+  announced once per window and never repeated.
+
 - **Manage link** — the no-password, signed, expiring bearer link a Subscriber uses to
   view, add, or remove Watches, or to unsubscribe. Possession of the link is authority;
   it is delivered out-of-band to the Subscriber's email.
 
-- **Operator alert** — an internal notification (to the system's operators, never to
-  Subscribers) that the system can no longer read a watched page. Distinct from an Alert
-  and never counted as "zero seats."
+- **Operator** — the single person who runs a deployment. Singular by definition, not a
+  team and not a rota: the Operator is the only party who can resolve an Operator alert,
+  because resolving one requires direct access to the deployment itself. Receiving the
+  alert and acting on it are therefore the same person. A deployment has exactly one
+  Operator; there is no second holder of the role and no notion of a backup Operator.
+
+- **Operator alert** — an internal notification (to the Operator, never to Subscribers)
+  that the system can no longer read a watched page. Distinct from an Alert and never
+  counted as "zero seats."
