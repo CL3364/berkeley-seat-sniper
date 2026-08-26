@@ -175,6 +175,7 @@ test.describe('AC-25: pilot invite browser privacy boundary', () => {
                 waitlisted: null,
                 waitlistMax: null,
                 waitlistOpen: null,
+                openReserved: null,
               },
             ],
           },
