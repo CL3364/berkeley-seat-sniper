@@ -54,5 +54,6 @@ ehthumbs.db
 # local-only operator tooling (owner decision 2026-06-09: keep untracked)
 scripts/wipe-subscriber-emails.ts
 
-# Owner working plan — local only, not part of the repo
+# Owner working docs — local only, not part of the repo
 LAUNCH-PLAN.md
+OPERATOR-GUIDE.md
