@@ -9,13 +9,9 @@ dist
 .gitattributes
 .prettierignore
 .prettierrc.json
-.claude
 .duet
 .mcp.json
 .playwright-mcp
-.codex
-.Codex
-.agents
 
 # Secrets and env files — NEVER baked into the image.
 .env
@@ -61,8 +57,6 @@ playwright.config.ts
 
 # Documentation files.
 *.md
-CLAUDE.md
-RUNBOOK.md
 CONTEXT.md
 constitution.md
 

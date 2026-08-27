@@ -1,6 +1,6 @@
 /**
  * Barrel for the Berkeley Seat Sniper API contract — the single source of truth
- * all teammates implement against (constitution / spec §4). Read-only to every
+ * every lane implements against (constitution / spec §4). Read-only to every
  * role except the architect. Framework-agnostic: only `zod` is imported here.
  *
  * Modules:

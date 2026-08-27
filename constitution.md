@@ -1,6 +1,6 @@
 # Constitution
 
-Durable principles for this project. Every agent reads this before acting. This is
+Durable principles for this project. Read before acting. This is
 project law: when guidance here conflicts with a model's generic habits, this wins.
 (Swap the stack section for your own; keep the principles.)
 
@@ -56,15 +56,15 @@ A watch-and-alert app adds three disjoint lanes that no CRUD role owns:
 mail/web-push provider keys (SMTP/Resend/SendGrid creds, VAPID keys, `*.key`/`*.pem`/
 `*vapid*`). For these:
 
-- Reads are denied to the model (settings `permissions.deny`); writes/creation are
-  blocked by the lane-guard. Secrets live in the environment, not in committed files.
+- Reads and writes are blocked at the tooling boundary. Secrets live in the
+  environment, not in committed files.
 - NEVER log subscriber emails or full watch lists. Log opaque ids and counts instead.
 - Keep the PII surface tiny by design: emails + watch lists + provider keys, nothing more.
-- Caveat (know the limit): deny rules cover the model's own tools and the file commands
-  Claude Code recognizes in Bash (`cat`, `sed`, …) — NOT a subprocess that opens files
-  itself (`node -e fs.readFileSync('.env')`). The app legitimately reads these at runtime;
+- Caveat (know the limit): path-based deny rules cover recognized file commands
+  (`cat`, `sed`, …) — NOT a subprocess that opens files itself
+  (`node -e fs.readFileSync('.env')`). The app legitimately reads these at runtime;
   the THREAT is exfiltration. Mitigate by denying egress tools (`curl`/`wget`/`nc`) and,
-  for hard isolation, enabling the OS sandbox (https://code.claude.com/docs/en/sandboxing).
+  for hard isolation, running under an OS sandbox.
 
 ## Scraping & monitor conduct (non-negotiable for watch-and-alert apps)
 
@@ -96,7 +96,7 @@ mail/web-push provider keys (SMTP/Resend/SendGrid creds, VAPID keys, `*.key`/`*.
 ## Definition of done (every task)
 
 1. Code matches `specs/spec.md` and the API contract — no drift.
-2. Stayed inside the owning lane (enforced by lane-guard).
+2. Stayed inside the owning lane for the change.
 3. `./scripts/fast-gate.sh` passes on changed files (format + lint).
 4. Unhappy paths handled.
    A FEATURE is done only when, additionally: `./scripts/integration-gate.sh` passes
@@ -107,11 +107,10 @@ mail/web-push provider keys (SMTP/Resend/SendGrid creds, VAPID keys, `*.key`/`*.
 ## Git rules (STRICT)
 
 - Sole contributor on all repos is GitHub user `CL3364`.
-- NEVER add Claude as a contributor/co-author/attribution anywhere: no `Co-authored-by:`
-  trailers, no "Generated with Claude" notes in commits, READMEs, CONTRIBUTORS, or any
+- No third-party contributor/co-author attribution anywhere: no `Co-authored-by:`
+  trailers and no generated-by notes in commits, READMEs, CONTRIBUTORS, or any
   GitHub-facing file.
 - Commit messages: short, one line, lowercase, imperative or plain phrasing. No bodies,
   no emoji, no conventional-commit prefixes unless explicitly requested.
-- Only the LEAD commits (single committer — see CLAUDE.md). After every `git commit`,
-  the lead STOPS and asks verbatim: "Push these changes to your visible GitHub repo?"
-  No `git push` until confirmed (`git push` is also denied in settings as a backstop).
+- Single committer. After every `git commit`, STOP and confirm before any push.
+  No `git push` until confirmed.

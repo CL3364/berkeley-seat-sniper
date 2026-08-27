@@ -6,7 +6,7 @@ Convention: when the grill (or any review) accepts a forward decision, capture t
 rationale in `docs/adr/` and the executable plan here.
 
 Read the linked ADR first, then the plan. Plans name the contract/schema/lane changes,
-tests, and sequence so a future implementer (or the agent team) can start cold.
+tests, and sequence so a future implementer can start cold.
 
 | Plan                                                       | What                                                                                                         | Decision                                                                          | Status                             |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- | ---------------------------------- |

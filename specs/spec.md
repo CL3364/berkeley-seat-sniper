@@ -1466,7 +1466,7 @@ anyone. No other pilot gate changes: real transport, double opt-in, authenticate
 SPF/DKIM/DMARC, robots/ToS confirmation, and the source-safety stop all still stand, and
 admission remains `closed` while any of them is open.
 
-## 8. Task breakdown (dependencies & owners; teammate names per AGENTS.md in parens)
+## 8. Task breakdown (dependencies & owners)
 
 | #   | Task                                                                                                                                                        | Owner role                                  | Depends on |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | ---------- |
@@ -1481,14 +1481,14 @@ admission remains `closed` while any of them is open.
 | 9   | Unit/integration coverage for FR-1–FR-28 and AC-1–AC-36, including activation/admission concurrency and real PostgreSQL/Redis lanes                         | test-engineer (test)                        | 2–6        |
 | 10  | Browser journeys and production-like Compose smoke tests                                                                                                    | e2e-qa-engineer (e2e)                       | 7–9        |
 | 11  | Independent security and code review                                                                                                                        | security-reviewer + code-reviewer (sec/rev) | 3–8        |
-| 12  | Full gates, release evidence, AC-1–AC-36, then `.claude/acceptance.passed`                                                                                  | lead                                        | 9–11       |
+| 12  | Full gates, release evidence, AC-1–AC-36, then the recorded acceptance sign-off                                                                             | lead                                        | 9–11       |
 
 Task 1 blocks implementation. Tasks 2 and 3 then run in parallel; 4 and 6 follow the DB
 contract; 5 joins DB + source; 7/8 integrate; independent tests/reviews precede acceptance.
 
 ## 9. File-ownership map (no path owned twice)
 
-- `specs/**`, `src/shared/**`, `CONTEXT.md`, `docs/**`, `README.md`, `RUNBOOK.md` →
+- `specs/**`, `src/shared/**`, `CONTEXT.md`, `docs/**`, `README.md` →
   architect (contract read-only to all others; glossary/ADR/plan edits are architect-only)
 - `src/db/**`, `drizzle/**` → database-engineer
 - `src/server/**`, `src/api/**` → backend-engineer
@@ -1501,28 +1501,11 @@ contract; 5 joins DB + source; 7/8 integrate; independent tests/reviews precede 
 - `e2e/**`, `playwright.config.ts` → e2e-qa-engineer
 - `Dockerfile`, `docker-compose*`, `Caddyfile`, `.github/**`, `.dockerignore`,
   `env.example` → devops-engineer
-- `scripts/**` → LEAD-ONLY territory (gates, lane-guard, ops scripts incl. the untracked
-  wipe script); no teammate edits it. The lead also syncs `scripts/lane-guard.sh` whenever
-  this map changes.
-- `.claude/agent-memory/**` → SHARED between the code-reviewer and the security-reviewer. This
-  is a carve-out from the lead-owned `.claude/**` row below; without it a reviewer writing its
-  own memory would look like a lane violation.
-  Stated precisely, because the guard and this map must not drift again: `scripts/lane-guard.sh`
-  enforces the SUBTREE, not per-reviewer separation — both reviewers can write anywhere under
-  `.claude/agent-memory/**`, and a cross-reviewer write is permitted. That is deliberate and
-  should not be "fixed" by narrowing the guard: `MEMORY.md` is a shared index both reviewers
-  update, and the current layout is asymmetric anyway (`code-reviewer/` is a directory while
-  the security reviewer's memory is the single file `security-review.md`), so a path-specific
-  rule would either break the shared index or encode an accident of layout. Per-reviewer
-  separation here is CONVENTION, not enforcement. The guard's purpose is to keep a
-  read-only reviewer out of application code, which it does; it is a lane guard, not an ACL.
-- `constitution.md`, `AGENTS.md`, `.claude/**` (EXCEPT `.claude/agent-memory/**` above),
-  `.codex/**`, `package.json`/lockfile,
-  `tsconfig.json`, `eslint.config.js`, `.prettierrc*`, `.gitignore`, `.prettierignore` → lead
-  (dependency adds are requested via the lead). Both agent-toolchain directories are
-  lead-owned and tracked: `.claude/**` and `.codex/**` describe how this repo is worked on and
-  are reviewed with the code. `.duet/**` is deliberately NOT here — it is untracked
-  peer-review working state (`.gitignore`), owned by whoever is running the section.
-  NOTE: `RUNBOOK.md` is ARCHITECT-owned via the `docs`/root-docs row above, not lead-owned.
+- `scripts/**` → RELEASE-ENGINEERING territory (the three verification gates and the
+  operator ops scripts, including the untracked subscriber-wipe tool); feature work does
+  not edit it.
+- `constitution.md`, `package.json`/lockfile,
+  `tsconfig.json`, `eslint.config.js`, `.prettierrc*`, `.gitignore`, `.prettierignore` →
+  release engineering; dependency additions are requested rather than made in a feature branch.
 - The subscriber store (`data/**`, `*.sqlite*`), `.env*`, and any key files are SENSITIVE:
   no role edits them with the model; secrets come from the environment.

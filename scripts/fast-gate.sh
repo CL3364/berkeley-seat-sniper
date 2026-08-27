@@ -2,7 +2,7 @@
 # fast-gate.sh — TaskCompleted hook. Runs ONLY cheap, lane-scoped checks on the
 # files that actually changed. Deliberately does NOT run a whole-program typecheck
 # or the full test suite — those run at the integration milestone (integration-gate.sh).
-# This avoids the classic deadlock where one teammate's completed task is blocked by
+# This avoids the classic deadlock where one completed task is blocked by
 # half-built code it does not own.
 # Exit 0 = allow completion. Exit 2 = block completion + send reason to the agent.
 

@@ -72,5 +72,4 @@ Each must be objectively pass/fail. Example:
   - `src/scraper/**` → scraper-engineer (external fetch + HTML parse + fixtures)
   - `src/worker/**` → worker-engineer (poller, change detection, fan-out)
   - `src/notify/**` → notifier-engineer (email / web-push dispatch)
-- This map MUST stay in sync with the `agent_type → lanes` map in
-  `scripts/lane-guard.sh` and each agent's frontmatter. No path may be owned twice.
+- No path may be owned twice.

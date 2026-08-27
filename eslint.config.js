@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 
 // Flat config. Kept lean so `eslint --max-warnings=0` (the fast-gate) only trips
 // on real problems, not stylistic noise (Prettier owns formatting). Type-aware
-// linting is intentionally NOT enabled to keep per-file checks fast for teammates.
+// linting is intentionally NOT enabled to keep per-file checks fast.
 export default tseslint.config(
   {
     ignores: [
